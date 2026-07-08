@@ -103,14 +103,18 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
           <NarrativeStream log={log} streamingText={streamingText} />
-          <NpcRoster npcs={state.visible_npcs} />
-          <ActionChips
-            exits={state.exits}
-            suggestions={state.suggested_actions}
-            onSelect={(action) => takeTurn(action, true)}
-            disabled={isStreaming}
-          />
-          <PlayerInput onSubmit={(message) => takeTurn(message, true)} disabled={isStreaming} />
+          {/* Shares NarrativeStream's max-w-3xl centering so exits/chips/input
+              line up under the text instead of stretching full width. */}
+          <div className="w-full max-w-3xl mx-auto">
+            <NpcRoster npcs={state.visible_npcs} />
+            <ActionChips
+              exits={state.exits}
+              suggestions={state.suggested_actions}
+              onSelect={(action) => takeTurn(action, true)}
+              disabled={isStreaming}
+            />
+            <PlayerInput onSubmit={(message) => takeTurn(message, true)} disabled={isStreaming} />
+          </div>
         </div>
         <AgentActivityPanel activity={activity} />
       </div>
