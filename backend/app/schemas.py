@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorldUpdate(BaseModel):
+    # Each update `type` carries different fields (location_change has
+    # player/to; a future item_pickup would carry different ones) — extra
+    # fields are allowed rather than modeling every type as its own class.
     model_config = ConfigDict(extra="allow")
 
     type: str

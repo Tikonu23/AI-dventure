@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -146,9 +147,9 @@ class MCPToolRouter:
 
 
 class AgentLoop:
-    def __init__(self, router: MCPToolRouter, emit) -> None:
+    def __init__(self, router: MCPToolRouter, emit: Callable[[dict], Awaitable[None]]) -> None:
         self.router = router
-        self.emit = emit  # async def emit(event: dict) -> None
+        self.emit = emit
         self.client = anthropic.AsyncAnthropic()
 
     async def run_turn(
@@ -188,6 +189,9 @@ class AgentLoop:
         got_suggest_actions = False
         narrative_parts: list[str] = []
 
+        # for/else: the `else` only runs if the loop exhausts MAX_CONTINUATIONS
+        # without hitting a `break` below (i.e. neither max_tokens, end_turn,
+        # nor suggest_actions ended it) — that's the runaway-loop case.
         for iteration in range(MAX_CONTINUATIONS):
             async with self.client.messages.stream(
                 model=MODEL,
@@ -235,6 +239,9 @@ class AgentLoop:
                 await self.emit({"type": "tool_call", "tool": block.name, "status": "running"})
                 try:
                     result = await self.router.call(block.name, block.input)
+                    # ponytail: move_player is the only write tool Phase 1 has, so
+                    # it's the only source of world_updates. Add a case per new
+                    # write tool (e.g. give_item, start_quest) as they show up.
                     if block.name == "move_player" and not result["is_error"]:
                         moved = json.loads(result["text"])
                         if "to" in moved:

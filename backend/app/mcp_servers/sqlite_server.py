@@ -116,6 +116,8 @@ def _seed(conn: sqlite3.Connection) -> None:
     )
 
 
+# Runs at import time so schema/seed exist before the first tool call this
+# subprocess receives — connection is per-call below, not held open.
 _startup_conn = _connect()
 _init_db(_startup_conn)
 _startup_conn.close()
