@@ -1,3 +1,5 @@
+import ReactMarkdown from 'react-markdown'
+
 export interface LogEntry {
   role: 'player' | 'narrator'
   text: string
@@ -8,26 +10,35 @@ interface Props {
   streamingText: string
 }
 
+// Claude writes narration with markdown emphasis (**bold**, lists, etc.) —
+// these target react-markdown's plain semantic output directly, since no
+// @tailwindcss/typography plugin is installed for a one-off prose block.
+const proseClasses =
+  'text-zinc-200 leading-relaxed ' +
+  '[&_p]:mb-4 [&_p:last-child]:mb-0 ' +
+  '[&_strong]:font-semibold [&_strong]:text-zinc-50 ' +
+  '[&_em]:italic [&_em]:text-zinc-300 ' +
+  '[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-4 ' +
+  '[&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-4 ' +
+  '[&_li]:mb-1'
+
 export function NarrativeStream({ log, streamingText }: Props) {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-      {log.map((entry, i) => (
-        <p
-          key={i}
-          className={
-            entry.role === 'player'
-              ? 'text-violet-300 italic'
-              : 'text-zinc-200 leading-relaxed whitespace-pre-wrap'
-          }
-        >
-          {entry.role === 'player' ? `> ${entry.text}` : entry.text}
-        </p>
-      ))}
+      {log.map((entry, i) =>
+        entry.role === 'player' ? (
+          <p key={i} className="text-violet-300 italic">{`> ${entry.text}`}</p>
+        ) : (
+          <div key={i} className={proseClasses}>
+            <ReactMarkdown>{entry.text}</ReactMarkdown>
+          </div>
+        ),
+      )}
       {streamingText && (
-        <p className="text-zinc-200 leading-relaxed whitespace-pre-wrap">
-          {streamingText}
+        <div className={proseClasses}>
+          <ReactMarkdown>{streamingText}</ReactMarkdown>
           <span className="animate-pulse">▍</span>
-        </p>
+        </div>
       )}
     </div>
   )
