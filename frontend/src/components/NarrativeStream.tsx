@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown'
+import { useTypewriter } from '../hooks/useTypewriter'
 
 export interface LogEntry {
   role: 'player' | 'narrator'
@@ -23,6 +24,10 @@ const proseClasses =
   '[&_li]:mb-1'
 
 export function NarrativeStream({ log, streamingText }: Props) {
+  // Only the in-flight turn types out — finalized log entries render whole,
+  // there's nothing left to reveal.
+  const revealed = useTypewriter(streamingText)
+
   return (
     <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
       {log.map((entry, i) =>
@@ -34,9 +39,9 @@ export function NarrativeStream({ log, streamingText }: Props) {
           </div>
         ),
       )}
-      {streamingText && (
+      {revealed && (
         <div className={proseClasses}>
-          <ReactMarkdown>{streamingText}</ReactMarkdown>
+          <ReactMarkdown>{revealed}</ReactMarkdown>
           <span className="animate-pulse">▍</span>
         </div>
       )}
