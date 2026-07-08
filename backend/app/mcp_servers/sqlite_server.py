@@ -125,7 +125,9 @@ _startup_conn.close()
 
 @mcp.tool()
 def get_location(location_id: str) -> dict:
-    """Retrieve a location's name, description, exits, and NPCs present."""
+    """Returns {id, name, description, exits, npcs} — exits maps direction
+    to the destination location_id; npcs is a list of {id, name, description}.
+    Returns {"error": ...} if location_id doesn't exist."""
     conn = _connect()
     try:
         row = conn.execute(
@@ -160,7 +162,8 @@ def get_location(location_id: str) -> dict:
 
 @mcp.tool()
 def get_npc(npc_id: str) -> dict:
-    """Retrieve an NPC's name and description by ID."""
+    """Returns {id, location_id, name, description}, or {"error": ...} if
+    npc_id doesn't exist."""
     conn = _connect()
     try:
         row = conn.execute(
@@ -175,7 +178,8 @@ def get_npc(npc_id: str) -> dict:
 
 @mcp.tool()
 def get_player(player_id: str) -> dict:
-    """Retrieve a player's current location ID."""
+    """Returns {id, location_id}, or {"error": ...} if player_id doesn't
+    exist."""
     conn = _connect()
     try:
         row = conn.execute(

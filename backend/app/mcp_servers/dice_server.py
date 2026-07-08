@@ -17,7 +17,9 @@ _DICE_RE = re.compile(r"^(\d*)d(\d+)([+-]\d+)?$", re.IGNORECASE)
 
 @mcp.tool()
 def roll(expression: str) -> dict:
-    """Roll dice using standard notation, e.g. '2d6+3', '1d20+5', '4d8'."""
+    """Standard notation, e.g. '2d6+3', '1d20+5', '4d8'. Returns
+    {expression, rolls, modifier, total}, or {"error": ...} if the
+    expression doesn't parse or is out of range."""
     match = _DICE_RE.match(expression.strip())
     if not match:
         return {"error": f"invalid dice expression '{expression}'"}
