@@ -306,6 +306,8 @@ Each NPC stores: name, age, occupation, description, voice, relationships, known
 
 Example memory: "The party rescued me from goblins." Claude retrieves this on subsequent interactions. It does not hallucinate it.
 
+**Cast pregeneration:** rather than Claude improvising new NPCs mid-scene (which then need a portrait generated live, on the fly, for whatever it just invented), pregenerate a cast into this schema at world-gen/campaign-creation time — same "pre-authored, retrieved never re-derived" pattern already used for world facts and NPC portraits. Hybrid, not fully fixed: a core cast tied to specific locations/plot beats (as Brother Aldric and The Collector already are) plus a smaller reserve pool of not-yet-placed characters Claude can pull from when it needs to introduce someone new — a fully rigid pregenerated cast risks feeling railroaded if players wander somewhere the roster doesn't cover.
+
 ---
 
 # Combat
