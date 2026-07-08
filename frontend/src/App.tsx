@@ -8,6 +8,11 @@ import { streamTurn } from './api/turn'
 import type { StructuredResponse } from './types'
 
 const PLAYER_ID = 'p1'
+// "Has this browser already started this player's game" — without it, every
+// reload re-sends "Begin the adventure." into whatever history already
+// exists, and Claude (correctly) narrates it as a continuation, not an
+// opening. Real per-player sessions are Phase 3; this is the Phase 1-sized fix.
+const STARTED_KEY = `ai-dventure:started:${PLAYER_ID}`
 
 type WorldState = Pick<
   StructuredResponse,
@@ -78,10 +83,14 @@ function App() {
 
   useEffect(() => {
     // Zero-setup entry: narrate the opening scene without requiring the
-    // player to type first. Guarded against React StrictMode's double-invoke.
+    // player to type first. Guarded against React StrictMode's double-invoke,
+    // and skipped entirely on a returning visit (see STARTED_KEY above).
     if (started.current) return
     started.current = true
-    void takeTurn('Begin the adventure.', false)
+    if (localStorage.getItem(STARTED_KEY)) return
+    void takeTurn('Begin the adventure.', false).finally(() => {
+      localStorage.setItem(STARTED_KEY, '1')
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
