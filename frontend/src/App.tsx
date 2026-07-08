@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NarrativeStream, type LogEntry } from './components/NarrativeStream'
 import { AgentActivityPanel, type ToolActivity } from './components/AgentActivityPanel'
 import { NpcRoster } from './components/NpcRoster'
-import { ExitButtons } from './components/ExitButtons'
-import { SuggestedActions } from './components/SuggestedActions'
+import { ActionChips } from './components/ActionChips'
 import { PlayerInput } from './components/PlayerInput'
 import { streamTurn } from './api/turn'
 import type { StructuredResponse } from './types'
@@ -96,13 +95,9 @@ function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           <NarrativeStream log={log} streamingText={streamingText} />
           <NpcRoster npcs={state.visible_npcs} />
-          <ExitButtons
+          <ActionChips
             exits={state.exits}
-            onExit={(direction) => takeTurn(`I go ${direction}.`, true)}
-            disabled={isStreaming}
-          />
-          <SuggestedActions
-            actions={state.suggested_actions}
+            suggestions={state.suggested_actions}
             onSelect={(action) => takeTurn(action, true)}
             disabled={isStreaming}
           />
