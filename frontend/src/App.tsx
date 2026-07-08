@@ -96,13 +96,19 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
-      <header className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between shrink-0">
-        <h1 className="text-lg font-semibold text-zinc-100">AI Dungeoneer</h1>
-        <span className="text-sm text-zinc-500">{state.location}</span>
+      <header className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between shrink-0">
+        <h1 className="text-lg font-semibold tracking-wide text-zinc-100 uppercase">
+          AI Dungeoneer
+        </h1>
+        {state.location && (
+          <span className="text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1">
+            {state.location}
+          </span>
+        )}
       </header>
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
-          <NarrativeStream log={log} streamingText={streamingText} />
+          <NarrativeStream log={log} streamingText={streamingText} isStreaming={isStreaming} />
           {/* Shares NarrativeStream's max-w-3xl centering so exits/chips/input
               line up under the text instead of stretching full width. */}
           <div className="w-full max-w-3xl mx-auto">
