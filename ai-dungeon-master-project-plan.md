@@ -232,7 +232,7 @@ The Agent Activity Panel is the demo anchor. Interviewers watch the agent plan a
 
 Single-player for Phase 1–2. Multiplayer in Phase 3.
 
-**Multiplayer:** one shared input stream. All players type into the same channel. Claude receives one message per turn and responds to the group. Turn resolution is FIFO — first submitted message triggers the AI turn.
+**Multiplayer:** one shared input stream. All players type into the same channel. Turn resolution is a bounded collection window, not FIFO (revised — FIFO rewards whoever types fastest): actions submitted within the window are collected, non-responders are treated as observing, and Claude synthesizes the group's inputs into one cohesive turn — similar/overlapping actions merge, conflicting ones (some attack, one flees) are narrated as in-party tension, not split into separate outcomes. The party always resolves as a single unit: one location, one narrative thread. Literal party-splitting (multiple locations/threads at once) is out of scope — it would break the single-location schema this whole design leans on. Requires per-player identity and a session/roster, which don't exist yet (Phase 1 has one hardcoded player_id) — that's the real Phase 3 prerequisite, not the resolution logic itself.
 
 **New player joins:** hydrate from current DB state. No history replay. They enter the world as it exists now, the same as joining an adventure already in progress.
 
