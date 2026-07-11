@@ -11,11 +11,10 @@ export default defineConfig({
         target: 'http://127.0.0.1:8123',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
-        // A turn can run several sequential Claude calls (tool loop) before
-        // turn_complete, so give the proxy generous headroom rather than
-        // risk it cutting the SSE connection short on a slow turn.
-        proxyTimeout: 120_000,
-        timeout: 120_000,
+        // No proxy timeouts: /games/{id}/events is an indefinite SSE stream.
+        // sse-starlette's keepalive pings hold the socket open, and if a hop
+        // still cuts it, EventSource auto-reconnects and the app refetches
+        // the snapshot — but don't invite that churn with a local timeout.
       },
     },
   },

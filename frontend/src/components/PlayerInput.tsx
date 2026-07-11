@@ -17,7 +17,7 @@ export function PlayerInput({ onSubmit, disabled }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="px-6 py-4 flex gap-3 border-t border-zinc-800">
+    <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-3 sm:py-4 flex gap-2 sm:gap-3 border-t border-zinc-800">
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}

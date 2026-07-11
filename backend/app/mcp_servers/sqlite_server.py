@@ -1,6 +1,9 @@
-"""MCP server exposing world state (locations, exits, NPCs, players) backed
-by a SQLite file. This is the only thing allowed to touch world.db — Claude
-never queries SQLite directly, only through these tools.
+"""MCP server exposing world state (locations, exits, NPCs, party position)
+backed by a SQLite file. This is the only thing allowed to MUTATE world state
+— Claude never queries SQLite directly, only through these tools. The session
+tables (games, game_players, game_log) are owned by app.db; get_party and
+move_party read/write games.location_id and rely on app.db.init_db() having
+run (the app lifespan guarantees it before this server takes tool calls).
 
 Run standalone via stdio: `python -m app.mcp_servers.sqlite_server`
 """
@@ -20,6 +23,12 @@ mcp = FastMCP("sqlite")
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # WAL because the FastAPI process (app.db) writes this same file from
+    # another process; without it cross-process writes intermittently fail
+    # with "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -42,10 +51,6 @@ def _init_db(conn: sqlite3.Connection) -> None:
             location_id TEXT NOT NULL,
             name TEXT NOT NULL,
             description TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS players (
-            id TEXT PRIMARY KEY,
-            location_id TEXT NOT NULL
         );
         """
     )
@@ -110,10 +115,6 @@ def _seed(conn: sqlite3.Connection) -> None:
             ),
         ],
     )
-    conn.execute(
-        "INSERT INTO players (id, location_id) VALUES (?, ?)",
-        ("p1", "dungeon_entrance"),
-    )
 
 
 # Runs at import time so schema/seed exist before the first tool call this
@@ -177,24 +178,26 @@ def get_npc(npc_id: str) -> dict:
 
 
 @mcp.tool()
-def get_player(player_id: str) -> dict:
-    """Returns {id, location_id}, or {"error": ...} if player_id doesn't
-    exist."""
+def get_party(game_id: str) -> dict:
+    """Returns {game_id, location_id} — the party's current position (the
+    whole party shares one location). Returns {"error": ...} if game_id
+    doesn't exist."""
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT id, location_id FROM players WHERE id = ?", (player_id,)
+            "SELECT id, location_id FROM games WHERE id = ?", (game_id,)
         ).fetchone()
         if row is None:
-            return {"error": f"unknown player '{player_id}'"}
-        return dict(row)
+            return {"error": f"unknown game '{game_id}'"}
+        return {"game_id": row["id"], "location_id": row["location_id"]}
     finally:
         conn.close()
 
 
 @mcp.tool()
-def move_player(player_id: str, direction: str) -> dict:
-    """Move a player through an exit from their current location.
+def move_party(game_id: str, direction: str) -> dict:
+    """Move the whole party through an exit from its current location — the
+    party always travels as a single unit.
 
     Fails with an error if there is no exit in that direction — the caller
     (Claude) should narrate that as a blocked path, not invent a new room.
@@ -202,10 +205,10 @@ def move_player(player_id: str, direction: str) -> dict:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT location_id FROM players WHERE id = ?", (player_id,)
+            "SELECT location_id FROM games WHERE id = ?", (game_id,)
         ).fetchone()
         if row is None:
-            return {"error": f"unknown player '{player_id}'"}
+            return {"error": f"unknown game '{game_id}'"}
         current = row["location_id"]
         exit_row = conn.execute(
             "SELECT to_location_id FROM exits WHERE location_id = ? AND direction = ?",
@@ -215,10 +218,10 @@ def move_player(player_id: str, direction: str) -> dict:
             return {"error": f"no exit '{direction}' from '{current}'"}
         new_location = exit_row["to_location_id"]
         conn.execute(
-            "UPDATE players SET location_id = ? WHERE id = ?", (new_location, player_id)
+            "UPDATE games SET location_id = ? WHERE id = ?", (new_location, game_id)
         )
         conn.commit()
-        return {"player": player_id, "from": current, "to": new_location}
+        return {"game_id": game_id, "from": current, "to": new_location}
     finally:
         conn.close()
 

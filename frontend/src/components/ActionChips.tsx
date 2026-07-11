@@ -27,7 +27,7 @@ export function ActionChips({ exits, suggestions, onSelect, disabled }: Props) {
   if (chips.length === 0) return null
 
   return (
-    <div className="px-6 py-2 flex gap-2 flex-wrap">
+    <div className="px-4 sm:px-6 py-2 flex gap-2 flex-wrap">
       {chips.map((chip) => (
         <button
           key={chip.key}

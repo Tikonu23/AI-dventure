@@ -50,17 +50,28 @@ You are the game master for a Darkest Dungeon-style text adventure: \
 grimdark, punishing, atmospheric dread. High stakes, morally ambiguous. \
 Gothic horror register — never cheerful, never cute.
 
-The player has one character, implied by the setting; there is no character \
-sheet. Narrate the opening scene and every consequence directly.
+This is a group adventure. The party (they always travel and act as a \
+single unit — one location, one scene, one narrative thread):
+{roster}
 
-The current player's ID is "{player_id}". Pass this exact value as the \
-player_id argument to any tool that takes one — never guess or invent one.
+Each player message is prefixed "[Name]:" identifying who acts. Judge every \
+action against that character's description — a warrior cannot cast a \
+wizard's spells, a wizard cannot match a warrior's brute force. Each \
+character brings only what their description supports. Narrate \
+out-of-character attempts as in-world failures or fumbles; never silently \
+grant abilities the description doesn't justify. Never take actions on \
+behalf of a character whose player didn't speak this turn, beyond their \
+presence in the scene.
+
+The current game's ID is "{game_id}". Pass this exact value as the \
+game_id argument to any tool that takes one — never guess or invent one. \
+Movement uses `move_party` and moves the entire party together.
 
 World state (locations, exits, NPCs, dice rolls) is retrieved through your \
 tools. Never invent a room, an NPC, or a dice result that a tool didn't \
-give you. If the player tries something that violates the physical world \
+give you. If a player tries something that violates the physical world \
 (flying, walking through walls), redirect them narratively without \
-breaking immersion. If the player tries something merely unwise but \
+breaking immersion. If a player tries something merely unwise but \
 physically possible, allow it and narrate the consequences.
 
 Every turn, after narrating, call `suggest_actions` exactly once with 2-4 \
@@ -153,13 +164,15 @@ class AgentLoop:
         self.client = anthropic.AsyncAnthropic()
 
     async def run_turn(
-        self, player_id: str, history: list[dict], player_action: str
+        self, game_id: str, roster: list[dict], history: list[dict], player_action: str
     ) -> tuple[StructuredResponse, list[dict]]:
+        """roster is [{name, description}, ...] — rebuilt from the DB each
+        turn so mid-game joins are always reflected in the system prompt."""
         try:
-            return await self._run_turn_inner(player_id, history, player_action)
+            return await self._run_turn_inner(game_id, roster, history, player_action)
         except Exception:
-            logger.exception("turn failed for player %s", player_id)
-            location = await self._read_location(player_id)
+            logger.exception("turn failed for game %s", game_id)
+            location = await self._read_location(game_id)
             fallback = StructuredResponse(
                 narrative=(
                     "The telling falters — something in the dark swallows "
@@ -173,16 +186,17 @@ class AgentLoop:
             )
             return fallback, history
 
-    async def _read_location(self, player_id: str) -> dict:
-        player = json.loads((await self.router.call("get_player", {"player_id": player_id}))["text"])
+    async def _read_location(self, game_id: str) -> dict:
+        party = json.loads((await self.router.call("get_party", {"game_id": game_id}))["text"])
         return json.loads(
-            (await self.router.call("get_location", {"location_id": player["location_id"]}))["text"]
+            (await self.router.call("get_location", {"location_id": party["location_id"]}))["text"]
         )
 
     async def _run_turn_inner(
-        self, player_id: str, history: list[dict], player_action: str
+        self, game_id: str, roster: list[dict], history: list[dict], player_action: str
     ) -> tuple[StructuredResponse, list[dict]]:
         tools = await self.router.anthropic_tools()
+        roster_block = "\n".join(f"- {p['name']}: {p['description']}" for p in roster)
         messages = [*history, {"role": "user", "content": player_action}]
         world_updates: list[dict] = []
         suggested_actions = ["Look around"]
@@ -196,7 +210,7 @@ class AgentLoop:
             async with self.client.messages.stream(
                 model=MODEL,
                 max_tokens=16000,
-                system=SYSTEM_PROMPT_TEMPLATE.format(player_id=player_id),
+                system=SYSTEM_PROMPT_TEMPLATE.format(game_id=game_id, roster=roster_block),
                 thinking={"type": "adaptive"},
                 tools=tools,
                 messages=messages,
@@ -211,9 +225,9 @@ class AgentLoop:
 
             if response.stop_reason == "max_tokens":
                 logger.warning(
-                    "turn for player %s hit max_tokens on iteration %d — narrative may be "
+                    "turn for game %s hit max_tokens on iteration %d — narrative may be "
                     "truncated and suggest_actions may not have run",
-                    player_id,
+                    game_id,
                     iteration,
                 )
                 break
@@ -239,15 +253,13 @@ class AgentLoop:
                 await self.emit({"type": "tool_call", "tool": block.name, "status": "running"})
                 try:
                     result = await self.router.call(block.name, block.input)
-                    # ponytail: move_player is the only write tool Phase 1 has, so
+                    # ponytail: move_party is the only write tool so far, so
                     # it's the only source of world_updates. Add a case per new
                     # write tool (e.g. give_item, start_quest) as they show up.
-                    if block.name == "move_player" and not result["is_error"]:
+                    if block.name == "move_party" and not result["is_error"]:
                         moved = json.loads(result["text"])
                         if "to" in moved:
-                            world_updates.append(
-                                {"type": "location_change", "player": player_id, "to": moved["to"]}
-                            )
+                            world_updates.append({"type": "location_change", "to": moved["to"]})
                     tool_results.append(
                         {
                             "type": "tool_result",
@@ -268,21 +280,21 @@ class AgentLoop:
                 break
         else:
             logger.warning(
-                "turn for player %s hit the %d-continuation cap without reaching end_turn",
-                player_id,
+                "turn for game %s hit the %d-continuation cap without reaching end_turn",
+                game_id,
                 MAX_CONTINUATIONS,
             )
 
         if not got_suggest_actions:
             logger.warning(
-                "turn for player %s ended without a suggest_actions call — falling back to %r",
-                player_id,
+                "turn for game %s ended without a suggest_actions call — falling back to %r",
+                game_id,
                 suggested_actions,
             )
         if not "".join(narrative_parts).strip():
-            logger.warning("turn for player %s produced no narrative text", player_id)
+            logger.warning("turn for game %s produced no narrative text", game_id)
 
-        location = await self._read_location(player_id)
+        location = await self._read_location(game_id)
 
         structured = StructuredResponse(
             narrative="".join(narrative_parts).strip(),

@@ -9,7 +9,9 @@ interface Props {
 
 export function AgentActivityPanel({ activity }: Props) {
   return (
-    <aside className="w-64 shrink-0 border-l border-zinc-800 px-4 py-4 overflow-y-auto">
+    // Desktop-only: on a phone this debug-flavored panel would steal most of
+    // the narrative column's width.
+    <aside className="hidden md:block w-64 shrink-0 border-l border-zinc-800 px-4 py-4 overflow-y-auto">
       <h2 className="text-xs uppercase tracking-wide text-zinc-500 mb-3">
         Agent Activity
       </h2>
