@@ -18,18 +18,31 @@ os.environ.setdefault(
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import db  # noqa: E402
+from app import db, worldgen  # noqa: E402
 from app.schemas import StructuredResponse  # noqa: E402
 
 
 @pytest.fixture
 def world_db(tmp_path, monkeypatch):
     """Point both the app-side db module and the MCP server at an isolated
-    per-test database, with session tables created."""
+    per-test database, with all tables created."""
     path = tmp_path / "world.db"
     monkeypatch.setenv("WORLD_DB_PATH", str(path))
     db.init_db()
     return path
+
+
+@pytest.fixture
+def make_world(world_db):
+    """Insert one hand-authored template world per call. Each game gets its
+    own world (they're single-use in production — cleanup deletes a game's
+    world, so sharing one across test games would trip the FK)."""
+
+    def _make() -> dict:
+        world_id = db.insert_world(worldgen.FALLBACK_WORLD, status="claimed")
+        return db.get_world(world_id)
+
+    return _make
 
 
 CANNED_RESPONSE = StructuredResponse(
@@ -54,7 +67,7 @@ class FakeAgentLoop:
     def __init__(self, router, emit):
         self.emit = emit
 
-    async def run_turn(self, game_id, roster, history, player_action):
+    async def run_turn(self, game_id, roster, world, history, player_action):
         import asyncio
 
         if self.delay:
@@ -72,10 +85,18 @@ class FakeAgentLoop:
 @pytest.fixture
 def client(world_db, monkeypatch):
     """TestClient with real lifespan (MCP subprocesses against the isolated
-    DB) but the model loop faked out."""
+    DB) but the model loop and world generation faked out."""
+    import copy
+
     from app import main
 
+    async def fake_generate_world(client, **kwargs):
+        return copy.deepcopy(worldgen.FALLBACK_WORLD)
+
     monkeypatch.setattr(main, "AgentLoop", FakeAgentLoop)
+    # Patched on the worldgen module — main calls it as worldgen.generate_world,
+    # and this also keeps the startup pool loop from making real API calls.
+    monkeypatch.setattr(worldgen, "generate_world", fake_generate_world)
     # Module-level room state leaks across tests otherwise.
     main.subscribers.clear()
     main.active_turns.clear()

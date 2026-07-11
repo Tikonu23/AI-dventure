@@ -1,11 +1,16 @@
-"""Session-data layer: games (rooms), their players, conversation history,
-and the display log. Owns the games/game_players/game_log tables in world.db;
-the world tables (locations, exits, npcs) belong to the sqlite MCP server.
+"""Data layer for world.db: generated worlds (with their locations, exits,
+NPCs, and pre-authored facts), the ready-world pool, games (rooms), players,
+conversation history, and the display log. Owns ALL table DDL — the sqlite
+MCP server only reads/mutates through it.
 
 Everything here is plain sync sqlite3, same as the MCP server — turns are
 serialized per game by main.py's active_turns gate, so contention on these
 tables is rare and WAL + busy_timeout covers the rest (the MCP subprocess
 writes the same file from another process).
+
+Entity ids are made globally unique by prefixing the world id onto the
+generator's slugs ("a1b2c3:crypt_hall"), so tools like get_location keep
+their single-id signature with no cross-world collisions or scoping params.
 """
 
 import json
@@ -16,8 +21,6 @@ from os import environ
 from pathlib import Path
 
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "world.db"
-
-STARTING_LOCATION = "dungeon_entrance"
 
 # No lookalike characters (0/O, 1/I/L, U/V) — room codes get read aloud over
 # voice chat and typed on phones.
@@ -43,14 +46,53 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create session tables. Called from app lifespan before the MCP router
-    starts, since get_party/move_party read the games table."""
+    """Create all tables. Called from app lifespan before the MCP router
+    starts, and from the MCP server's own import for standalone runs."""
     conn = _connect()
     try:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS worlds (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                concept TEXT NOT NULL,
+                starting_location_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ready',  -- 'ready' | 'claimed'
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS locations (
+                id TEXT PRIMARY KEY,
+                world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS exits (
+                world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                location_id TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                to_location_id TEXT NOT NULL,
+                PRIMARY KEY (location_id, direction)
+            );
+            CREATE TABLE IF NOT EXISTS npcs (
+                id TEXT PRIMARY KEY,
+                world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                location_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL
+            );
+            -- Pre-authored secrets (weak spots, hidden doors, puzzle
+            -- solutions) as key-value pairs against an entity — a stable
+            -- schema no matter what fact types future modes add.
+            CREATE TABLE IF NOT EXISTS world_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                entity_id TEXT NOT NULL,   -- location/npc id, or the world id
+                key TEXT NOT NULL,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS games (
                 id TEXT PRIMARY KEY,
+                world_id TEXT NOT NULL REFERENCES worlds(id),
                 location_id TEXT NOT NULL,
                 history_json TEXT NOT NULL DEFAULT '[]',
                 last_response_json TEXT,
@@ -90,6 +132,90 @@ def _sanitize_name(name: str) -> str:
     return cleaned.strip()[:30]
 
 
+def insert_world(world: dict, status: str = "ready") -> str:
+    """Persist a validated generator payload as one world, prefixing every
+    slug with the world id so entity ids are globally unique. Returns the
+    world id. `world` shape: {title, concept, starting_location,
+    locations: [{id, name, description, exits: [{direction, to}]}],
+    npcs: [{id, location, name, description}],
+    facts: [{entity: slug|'world', key, value}]}.
+    """
+    world_id = uuid.uuid4().hex[:8]
+    qualify = lambda slug: f"{world_id}:{slug}"  # noqa: E731
+
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO worlds (id, title, concept, starting_location_id, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (world_id, world["title"], world["concept"], qualify(world["starting_location"]), status),
+        )
+        for loc in world["locations"]:
+            conn.execute(
+                "INSERT INTO locations (id, world_id, name, description) VALUES (?, ?, ?, ?)",
+                (qualify(loc["id"]), world_id, loc["name"], loc["description"]),
+            )
+            for ex in loc["exits"]:
+                conn.execute(
+                    "INSERT INTO exits (world_id, location_id, direction, to_location_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (world_id, qualify(loc["id"]), ex["direction"], qualify(ex["to"])),
+                )
+        for npc in world["npcs"]:
+            conn.execute(
+                "INSERT INTO npcs (id, world_id, location_id, name, description) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (qualify(npc["id"]), world_id, qualify(npc["location"]), npc["name"], npc["description"]),
+            )
+        for fact in world.get("facts", []):
+            entity = world_id if fact["entity"] == "world" else qualify(fact["entity"])
+            conn.execute(
+                "INSERT INTO world_facts (world_id, entity_id, key, value) VALUES (?, ?, ?, ?)",
+                (world_id, entity, fact["key"], fact["value"]),
+            )
+        conn.commit()
+        return world_id
+    finally:
+        conn.close()
+
+
+def claim_world() -> dict | None:
+    """Atomically take one ready world out of the pool for a new game.
+    Returns {id, title, concept, starting_location_id} or None if the pool
+    is empty (caller then generates on demand)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "UPDATE worlds SET status = 'claimed' WHERE id = "
+            "(SELECT id FROM worlds WHERE status = 'ready' ORDER BY created_at LIMIT 1) "
+            "RETURNING id, title, concept, starting_location_id"
+        ).fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def ready_world_count() -> int:
+    conn = _connect()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM worlds WHERE status = 'ready'").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def get_world(world_id: str) -> dict | None:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id, title, concept, starting_location_id, status FROM worlds WHERE id = ?",
+            (world_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def _new_room_code(conn: sqlite3.Connection) -> str:
     for _ in range(5):
         code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
@@ -111,14 +237,16 @@ def _insert_player(conn: sqlite3.Connection, game_id: str, name: str, descriptio
     return {"player_id": player_id, "player_token": token, "name": sanitized}
 
 
-def create_game(name: str, description: str) -> dict:
-    """New room + its first player, one transaction.
-    Returns {game_id, player_id, player_token}."""
+def create_game(name: str, description: str, world: dict) -> dict:
+    """New room in a claimed world + its first player, one transaction.
+    `world` is the claim_world()/get_world() row. Returns
+    {game_id, player_id, player_token, name}."""
     conn = _connect()
     try:
         game_id = _new_room_code(conn)
         conn.execute(
-            "INSERT INTO games (id, location_id) VALUES (?, ?)", (game_id, STARTING_LOCATION)
+            "INSERT INTO games (id, world_id, location_id) VALUES (?, ?, ?)",
+            (game_id, world["id"], world["starting_location_id"]),
         )
         player = _insert_player(conn, game_id, name, description)
         conn.commit()
@@ -142,10 +270,14 @@ def add_player(game_id: str, name: str, description: str) -> dict | None:
 
 
 def get_game(game_id: str) -> dict | None:
+    """Game row joined with its world's title/concept — every caller that
+    loads a game also wants the world context for the prompt or the UI."""
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT id, location_id, last_response_json, last_active_at FROM games WHERE id = ?",
+            "SELECT g.id, g.world_id, g.location_id, g.last_response_json, g.last_active_at, "
+            "w.title AS world_title, w.concept AS world_concept "
+            "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
             (game_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -307,14 +439,25 @@ def load_log(game_id: str) -> tuple[list[dict], int]:
 
 
 def delete_idle_games(days: int = 30) -> int:
-    """Delete games idle past the cutoff; cascades players and log rows.
-    Returns how many games were deleted."""
+    """Delete games idle past the cutoff; cascades players and log rows, and
+    deletes each game's (single-use) world — which cascades its locations,
+    exits, npcs, and facts. Returns how many games were deleted."""
     conn = _connect()
     try:
+        world_ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT world_id FROM games WHERE last_active_at < datetime('now', ?)",
+                (f"-{days} days",),
+            )
+        ]
         cursor = conn.execute(
             "DELETE FROM games WHERE last_active_at < datetime('now', ?)", (f"-{days} days",)
         )
+        deleted = cursor.rowcount
+        for world_id in world_ids:
+            conn.execute("DELETE FROM worlds WHERE id = ?", (world_id,))
         conn.commit()
-        return cursor.rowcount
+        return deleted
     finally:
         conn.close()

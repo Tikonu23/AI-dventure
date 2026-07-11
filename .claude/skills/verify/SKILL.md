@@ -23,7 +23,13 @@ Gotchas:
   (the port's `OwningProcess` PID may already be dead).
 - Killing the backend must also kill its two MCP stdio subprocesses
   (command lines contain `mcp_servers`).
-- Schema is created on startup; deleting `backend/world.db*` gives a fresh world.
+- Schema is created on startup; deleting `backend/world.db*` gives a fresh DB.
+- Worlds are AI-generated into a ready pool (`WORLD_POOL_SIZE`, default 1) by a
+  startup background task. On a fresh DB the first create usually generates
+  on demand (~60s, real Claude call, frontend shows "The world takes shape…");
+  once the pool has refilled, creates claim instantly. Tests fake generation
+  via `worldgen.generate_world` monkeypatch; `worldgen.FALLBACK_WORLD` is the
+  hand-authored template used by tests and the degrade path.
 
 ## Drive
 

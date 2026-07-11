@@ -50,6 +50,16 @@ You are the game master for a Darkest Dungeon-style text adventure: \
 grimdark, punishing, atmospheric dread. High stakes, morally ambiguous. \
 Gothic horror register — never cheerful, never cute.
 
+The campaign's world — ground every scene in this premise:
+{world_title}: {world_concept}
+
+Locations and NPCs carry pre-authored secret `facts` in their tool results. \
+These are the world's hidden truth: enforce them exactly (a hidden door \
+opens the way the fact says, a weakness works only as written), foreshadow \
+them, and let players earn their discovery through searching, experimenting, \
+and questioning — never state them unprompted, and never contradict or \
+re-invent them.
+
 This is a group adventure. The party (they always travel and act as a \
 single unit — one location, one scene, one narrative thread):
 {roster}
@@ -164,12 +174,18 @@ class AgentLoop:
         self.client = anthropic.AsyncAnthropic()
 
     async def run_turn(
-        self, game_id: str, roster: list[dict], history: list[dict], player_action: str
+        self,
+        game_id: str,
+        roster: list[dict],
+        world: dict,
+        history: list[dict],
+        player_action: str,
     ) -> tuple[StructuredResponse, list[dict]]:
         """roster is [{name, description}, ...] — rebuilt from the DB each
-        turn so mid-game joins are always reflected in the system prompt."""
+        turn so mid-game joins are always reflected in the system prompt.
+        world is {title, concept} — this game's generated premise."""
         try:
-            return await self._run_turn_inner(game_id, roster, history, player_action)
+            return await self._run_turn_inner(game_id, roster, world, history, player_action)
         except Exception:
             logger.exception("turn failed for game %s", game_id)
             location = await self._read_location(game_id)
@@ -193,7 +209,12 @@ class AgentLoop:
         )
 
     async def _run_turn_inner(
-        self, game_id: str, roster: list[dict], history: list[dict], player_action: str
+        self,
+        game_id: str,
+        roster: list[dict],
+        world: dict,
+        history: list[dict],
+        player_action: str,
     ) -> tuple[StructuredResponse, list[dict]]:
         tools = await self.router.anthropic_tools()
         roster_block = "\n".join(f"- {p['name']}: {p['description']}" for p in roster)
@@ -210,7 +231,12 @@ class AgentLoop:
             async with self.client.messages.stream(
                 model=MODEL,
                 max_tokens=16000,
-                system=SYSTEM_PROMPT_TEMPLATE.format(game_id=game_id, roster=roster_block),
+                system=SYSTEM_PROMPT_TEMPLATE.format(
+                    game_id=game_id,
+                    roster=roster_block,
+                    world_title=world["title"],
+                    world_concept=world["concept"],
+                ),
                 thinking={"type": "adaptive"},
                 tools=tools,
                 messages=messages,

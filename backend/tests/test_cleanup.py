@@ -16,9 +16,10 @@ def _table_count(world_db, table, game_id):
         conn.close()
 
 
-def test_deletes_only_idle_games_and_cascades(world_db):
-    stale = db.create_game("Thorin", "a dwarf warrior")
-    fresh = db.create_game("Zara", "an elven wizard")
+def test_deletes_only_idle_games_and_cascades(world_db, make_world):
+    stale_world = make_world()
+    stale = db.create_game("Thorin", "a dwarf warrior", stale_world)
+    fresh = db.create_game("Zara", "an elven wizard", make_world())
     db.append_log(stale["game_id"], "system", "Thorin joins the party.")
 
     conn = sqlite3.connect(world_db)
@@ -36,10 +37,22 @@ def test_deletes_only_idle_games_and_cascades(world_db):
     assert _table_count(world_db, "game_players", stale["game_id"]) == 0
     assert _table_count(world_db, "game_log", stale["game_id"]) == 0
     assert _table_count(world_db, "game_players", fresh["game_id"]) == 1
+    # The stale game's single-use world goes with it — locations and facts
+    # cascade off the world row.
+    assert db.get_world(stale_world["id"]) is None
+    conn = sqlite3.connect(world_db)
+    try:
+        for table in ("locations", "npcs", "world_facts"):
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE world_id = ?", (stale_world["id"],)
+            ).fetchone()[0]
+            assert count == 0, f"{table} rows survived world deletion"
+    finally:
+        conn.close()
 
 
-def test_thirty_day_boundary_keeps_recent_games(world_db):
-    recent = db.create_game("Thorin", "a dwarf warrior")
+def test_thirty_day_boundary_keeps_recent_games(world_db, make_world):
+    recent = db.create_game("Thorin", "a dwarf warrior", make_world())
     conn = sqlite3.connect(world_db)
     conn.execute(
         "UPDATE games SET last_active_at = datetime('now', '-29 days') WHERE id = ?",

@@ -87,8 +87,21 @@ export function JoinScreen({ onSession, initialRoomCode }: Props) {
           disabled={busy || !name.trim() || !description.trim()}
           className="w-full rounded-lg bg-violet-600 px-5 py-3 text-base font-medium text-white hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {busy ? 'Entering the dark…' : joining ? `Join party in room ${roomCode.trim()}` : 'Begin a new adventure'}
+          {busy
+            ? joining
+              ? 'Entering the dark…'
+              : 'The world takes shape…'
+            : joining
+              ? `Join party in room ${roomCode.trim()}`
+              : 'Begin a new adventure'}
         </button>
+        {busy && !joining && (
+          // Creating may generate a world on demand when the ready pool is
+          // empty — that's a real Claude call, up to a minute.
+          <p className="text-xs text-zinc-600 text-center">
+            A new world is being written for your party — this can take up to a minute.
+          </p>
+        )}
       </form>
     </div>
   )

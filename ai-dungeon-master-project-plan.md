@@ -5,7 +5,7 @@
 
 # Goal
 
-Build a web application where players drop into an AI-generated adventure with zero setup — no character sheets, no backstory prompts. Claude acts as a persistent game master, managing world state through MCP tools and narrating a living world that responds to player actions.
+Build a web application where players drop into an AI-generated adventure with minimal setup — no character sheets, no backstory prompts. Claude acts as a persistent game master, managing world state through MCP tools and narrating a living world that responds to player actions.
 
 This is not a chatbot pretending to run a game. It is an AI agent that plans, retrieves world state, validates actions against pre-authored facts, generates assets, and narrates through structured tool use — all visible to the player in real time.
 
@@ -135,9 +135,11 @@ Phases are sequenced so there is always a demoable slice. The agent-visible tool
 ## Phase 2 — Depth
 
 **What gets built:**
+- AI World generation phase instead of pre-generated entrance, rooms, and NPCs. A pool is kept of generated worlds, with the default number of worlds to have prepared set to 1.
+- A player HUD with animating health & mana orbs and an inventory grid
 - LotR and Survival modes (Survival adds resource tracking)
 - Context retrieval strategy implemented properly (see below)
-- Persistent NPC memory, relationships, quests
+- Persistent NPC memory, relationships, quests in a given game
 - Combat state and turn handling
 - Action validation for implausible vs. inadvisable cases
 

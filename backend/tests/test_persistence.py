@@ -70,7 +70,7 @@ def test_turn_advances_last_active_at(client, world_db):
     assert after > before
 
 
-def test_history_strips_response_only_block_fields(world_db):
+def test_history_strips_response_only_block_fields(world_db, make_world):
     # SDK text blocks carry response-only extras (parsed_output) — sending
     # them back as input is a 400 from the API. Regression: a game bricked
     # after its first persisted turn because every later turn failed on this.
@@ -80,7 +80,7 @@ def test_history_strips_response_only_block_fields(world_db):
         parsed_output: str | None = "should not survive"
         citations: list | None = None
 
-    game = db.create_game("Thorin", "a dwarf warrior")
+    game = db.create_game("Thorin", "a dwarf warrior", make_world())
     history = [{"role": "assistant", "content": [SdkTextBlock()]}]
     db.save_turn(game["game_id"], history, "{}", [])
 

@@ -14,15 +14,17 @@ serialization and event fan-out.
 import asyncio
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app import db
+from app import db, worldgen
 from app.agent import AgentLoop, MCPToolRouter
 
 load_dotenv()
@@ -31,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 CLEANUP_INTERVAL_SECONDS = 3600
 IDLE_GAME_DAYS = 30
+# How many generated worlds to keep ready so a new game starts instantly.
+WORLD_POOL_SIZE = int(os.environ.get("WORLD_POOL_SIZE", "1"))
 
 router = MCPToolRouter()
 
@@ -63,14 +67,41 @@ async def cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
+# Poked whenever a world is claimed so the pool refills immediately instead
+# of waiting for the safety-net tick.
+pool_wake = asyncio.Event()
+
+
+async def world_pool_loop() -> None:
+    while True:
+        try:
+            while db.ready_world_count() < WORLD_POOL_SIZE:
+                logger.info("world pool below target %d — generating", WORLD_POOL_SIZE)
+                world = await worldgen.generate_world(anthropic.AsyncAnthropic())
+                world_id = db.insert_world(world)
+                logger.info("world %s ready: %s", world_id, world["title"])
+        except Exception:
+            # API outage or repeated validation failure — back off rather
+            # than hammering; on-demand generation still covers creates.
+            logger.exception("world pool refill failed; retrying in 60s")
+            await asyncio.sleep(60)
+            continue
+        pool_wake.clear()
+        try:
+            await asyncio.wait_for(pool_wake.wait(), timeout=600)
+        except TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Session tables must exist before the MCP server takes get_party calls.
+    # All tables must exist before the MCP server takes get_party calls.
     db.init_db()
     await router.start()
-    cleanup_task = asyncio.create_task(cleanup_loop())
+    background = [asyncio.create_task(cleanup_loop()), asyncio.create_task(world_pool_loop())]
     yield
-    cleanup_task.cancel()
+    for task in background:
+        task.cancel()
     await router.aclose()
 
 
@@ -102,7 +133,21 @@ def _require_player(game_id: str, token: str) -> dict:
 
 @app.post("/games")
 async def create_game(req: JoinRequest) -> dict:
-    return db.create_game(req.name, req.description)
+    world = db.claim_world()
+    if world is None:
+        # Pool empty (burst of creates, or generation has been failing) —
+        # generate on demand while the frontend shows its loading state.
+        # If generation itself fails, degrade to the hand-authored fallback
+        # world rather than refusing the game.
+        try:
+            payload = await worldgen.generate_world(anthropic.AsyncAnthropic())
+        except Exception:
+            logger.exception("on-demand world generation failed — using fallback world")
+            payload = worldgen.FALLBACK_WORLD
+        world_id = db.insert_world(payload, status="claimed")
+        world = db.get_world(world_id)
+    pool_wake.set()
+    return db.create_game(req.name, req.description, world)
 
 
 @app.post("/games/{game_id}/join")
@@ -163,6 +208,7 @@ async def game_state(game_id: str, token: str) -> dict:
 
     return {
         "game_id": game_id,
+        "world_title": game["world_title"],
         "players": db.list_players(game_id),
         "log": log_entries,
         "last_log_id": last_log_id,
@@ -238,9 +284,11 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
         else:
             action = req.message
 
+        game = db.get_game(game_id)
+        world = {"title": game["world_title"], "concept": game["world_concept"]}
         roster = db.list_players(game_id)
         agent = AgentLoop(router, emit=lambda event: broadcast(game_id, event))
-        structured, new_history = await agent.run_turn(game_id, roster, history, action)
+        structured, new_history = await agent.run_turn(game_id, roster, world, history, action)
 
         log_entries = []
         if req.log_player_action:

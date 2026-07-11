@@ -88,6 +88,7 @@ export interface Session {
 /** GET /games/{id}/state — everything needed to (re)hydrate the screen. */
 export interface GameSnapshot {
   game_id: string
+  world_title: string
   players: PartyMember[]
   log: LogEntry[]
   last_log_id: number

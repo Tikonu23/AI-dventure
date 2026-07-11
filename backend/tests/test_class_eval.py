@@ -20,6 +20,7 @@ import pytest
 
 from app import db
 from app.agent import AgentLoop, MCPToolRouter
+from app.worldgen import FALLBACK_WORLD
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
@@ -97,13 +98,23 @@ async def test_class_enforcement(tmp_path, action, should_grant):
         pass
 
     async with _fresh_router(tmp_path / "eval_world.db") as router:
-        game = db.create_game("Thorin", "a dwarf warrior with a battleaxe. No magical ability.")
+        world_id = db.insert_world(FALLBACK_WORLD, status="claimed")
+        world = db.get_world(world_id)
+        game = db.create_game(
+            "Thorin", "a dwarf warrior with a battleaxe. No magical ability.", world
+        )
         db.add_player(
             game["game_id"], "Zara", "an elven wizard specializing in fire magic. No martial prowess."
         )
         roster = db.list_players(game["game_id"])
         agent = AgentLoop(router, emit)
-        structured, _ = await agent.run_turn(game["game_id"], roster, [], action)
+        structured, _ = await agent.run_turn(
+            game["game_id"],
+            roster,
+            {"title": FALLBACK_WORLD["title"], "concept": FALLBACK_WORLD["concept"]},
+            [],
+            action,
+        )
 
     client = anthropic.AsyncAnthropic()
     granted, reason = await _judge(client, action, structured.narrative)

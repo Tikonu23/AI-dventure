@@ -223,6 +223,7 @@ function Game({
   const applySnapshot = useCallback(
     async (buffered?: RoomEvent[]) => {
       const snapshot = await fetchGameState(session.roomCode, session.playerToken)
+      document.title = `${snapshot.world_title} — AI Dungeoneer`
       setLog(snapshot.log)
       setPartyNames(snapshot.players.map((p) => p.name))
       setState({
