@@ -5,10 +5,18 @@ import { NpcRoster } from './components/NpcRoster'
 import { ActionChips } from './components/ActionChips'
 import { PlayerInput } from './components/PlayerInput'
 import { JoinScreen } from './components/JoinScreen'
-import { postTurn, TurnRejectedError } from './api/turn'
-import { fetchGameState, SessionInvalidError } from './api/games'
+import { DiceRollPrompt } from './components/DiceRollPrompt'
+import { postRoll, postTurn, TurnRejectedError } from './api/turn'
+import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
-import type { LogEntry, RoomEvent, Session, StructuredResponse } from './types'
+import type {
+  DiceResultEvent,
+  LogEntry,
+  RoomEvent,
+  Session,
+  StructuredResponse,
+  SuggestedAction,
+} from './types'
 
 const LAST_ROOM_KEY = 'ai-dventure:last-room'
 const sessionKey = (roomCode: string) => `ai-dventure:session:${roomCode}`
@@ -51,6 +59,15 @@ type WorldState = Pick<
   StructuredResponse,
   'location' | 'exits' | 'visible_npcs' | 'suggested_actions'
 >
+
+// Suggestions tagged for another character are theirs, not ours — showing
+// them only invites actions the GM will refuse.
+function suggestionsFor(suggestions: SuggestedAction[], playerName: string): string[] {
+  return suggestions
+    .map((s) => (typeof s === 'string' ? { text: s, character: null } : s))
+    .filter((s) => !s.character || s.character === playerName)
+    .map((s) => s.text)
+}
 
 function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession(roomFromUrl()))
@@ -115,6 +132,11 @@ function Game({
   const [isStreaming, setIsStreaming] = useState(false)
   const [isHydrating, setIsHydrating] = useState(true)
   const [actor, setActor] = useState<string | null>(null)
+  const [pendingRoll, setPendingRoll] = useState<string | null>(null)
+  const [diceResult, setDiceResult] = useState<DiceResultEvent | null>(null)
+  // Remount key so a second roll in the same turn starts the widget fresh
+  // (clicked/revealed are its internal state).
+  const [rollSeq, setRollSeq] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   // StrictMode double-invoke guard for the auto-sent opening turn.
@@ -157,12 +179,23 @@ function Game({
       })
     } else if (event.type === 'narrative_chunk') {
       setStreamingText((prev) => prev + event.text)
+    } else if (event.type === 'dice_pending') {
+      setPendingRoll(event.expression)
+      setDiceResult(null)
+      setRollSeq((seq) => seq + 1)
+    } else if (event.type === 'dice_result') {
+      // The widget tumbles then settles on this — the narrative retells the
+      // roll, so nothing is persisted for it.
+      setPendingRoll(null)
+      setDiceResult(event)
     } else if (event.type === 'turn_complete') {
       const { response } = event
       setLog((prev) => [...prev, { role: 'narrator', text: response.narrative }])
       setStreamingText('')
       setIsStreaming(false)
       setActor(null)
+      setPendingRoll(null)
+      setDiceResult(null)
       setState({
         location: response.location,
         exits: response.exits,
@@ -172,6 +205,9 @@ function Game({
     } else if (event.type === 'player_joined') {
       setLog((prev) => [...prev, { role: 'system', text: `${event.name} joins the party.` }])
       setPartyNames((prev) => (prev.includes(event.name) ? prev : [...prev, event.name]))
+    } else if (event.type === 'player_left') {
+      setLog((prev) => [...prev, { role: 'system', text: `${event.name} leaves the party.` }])
+      setPartyNames((prev) => prev.filter((n) => n !== event.name))
     } else if (event.type === 'turn_error') {
       setLog((prev) => [
         ...prev,
@@ -179,8 +215,18 @@ function Game({
       ])
       setIsStreaming(false)
       setActor(null)
+      setPendingRoll(null)
+      setDiceResult(null)
     }
   }, [session.playerId])
+
+  // The settled die lingers a beat, then clears — turn_complete also clears
+  // it, but the narrative often keeps streaming long after the roll.
+  useEffect(() => {
+    if (!diceResult) return
+    const id = setTimeout(() => setDiceResult(null), 4000)
+    return () => clearTimeout(id)
+  }, [diceResult])
 
   const takeTurn = useCallback(
     async (message: string, logPlayerAction: boolean) => {
@@ -234,6 +280,8 @@ function Game({
       })
       setIsStreaming(snapshot.turn_in_progress)
       setActor(snapshot.actor)
+      setPendingRoll(snapshot.pending_roll)
+      setDiceResult(null)
       setStreamingText('')
       setActivity([])
 
@@ -253,6 +301,9 @@ function Game({
         // snapshot was taken — its player bubble is already a log row.
         if (event.type === 'turn_started' && !snapshot.turn_in_progress) continue
         if (event.type === 'player_joined' && snapshot.players.some((p) => p.name === event.name))
+          continue
+        // Same dedupe for departures — the snapshot already reflects them.
+        if (event.type === 'player_left' && !snapshot.players.some((p) => p.name === event.name))
           continue
         handleEvent(event)
       }
@@ -323,7 +374,10 @@ function Game({
   }
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-950">
+    // dvh, not vh: 100vh overshoots the visible area on mobile (URL bar),
+    // pushing the input below the fold
+    // No bg here — the patterned body backdrop (index.css) shows through
+    <div className="h-dvh flex flex-col">
       <header className="px-4 sm:px-6 py-3 sm:py-4 border-b border-zinc-800 flex items-center justify-between gap-2 shrink-0">
         {/* min-w-0 so the party-names span truncates instead of wrapping the
             whole header into multiple rows on narrow screens. */}
@@ -344,11 +398,26 @@ function Game({
             </span>
           )}
         </div>
-        {state.location && (
-          <span className="text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 whitespace-nowrap truncate">
-            {state.location}
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {state.location && (
+            <span className="text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 whitespace-nowrap truncate">
+              {state.location}
+            </span>
+          )}
+          <button
+            onClick={() => {
+              if (!window.confirm('Leave this game? Your character departs the party.')) return
+              // Fire-and-forget: even if the server call fails, this browser
+              // is done with the room — clear the session either way.
+              void leaveGame(session.roomCode, session.playerToken).catch(() => {})
+              onSessionInvalid()
+            }}
+            title="Leave this game — you can start or join another"
+            className="text-xs text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 hover:text-red-300 hover:border-red-500/40 whitespace-nowrap"
+          >
+            Leave
+          </button>
+        </div>
       </header>
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -366,10 +435,22 @@ function Game({
             <NpcRoster npcs={state.visible_npcs} />
             <ActionChips
               exits={state.exits}
-              suggestions={state.suggested_actions}
+              suggestions={suggestionsFor(state.suggested_actions, session.playerName)}
               onSelect={(action) => takeTurn(action, true)}
               disabled={isStreaming || isHydrating}
             />
+            {(pendingRoll !== null || diceResult !== null) && (
+              <DiceRollPrompt
+                key={rollSeq}
+                expression={pendingRoll ?? diceResult!.expression}
+                // ponytail: matched by name — player names aren't guaranteed
+                // unique in a room; switch to actor_id if that ever bites.
+                canRoll={actor === session.playerName}
+                actor={actor}
+                result={diceResult}
+                onRoll={() => void postRoll(session.roomCode, session.playerToken)}
+              />
+            )}
             <PlayerInput
               onSubmit={(message) => takeTurn(message, true)}
               disabled={isStreaming || isHydrating}

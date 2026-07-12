@@ -85,7 +85,11 @@ breaking immersion. If a player tries something merely unwise but \
 physically possible, allow it and narrate the consequences.
 
 Every turn, after narrating, call `suggest_actions` exactly once with 2-4 \
-short suggested next actions.
+short suggested next actions. Tag each suggestion with the exact name of \
+the character it's for when only that character could take it (their \
+abilities, their held items, their unfinished business); use null for \
+actions any party member could take. Never tag a suggestion with a name \
+not in the party roster above.
 """
 
 SUGGEST_ACTIONS_TOOL = {
@@ -102,7 +106,21 @@ SUGGEST_ACTIONS_TOOL = {
         "properties": {
             "actions": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "character": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "Exact name of the party member this suggestion "
+                                "is for, or null if anyone could take it."
+                            ),
+                        },
+                    },
+                    "required": ["text", "character"],
+                    "additionalProperties": False,
+                },
             }
         },
         "required": ["actions"],
@@ -168,9 +186,18 @@ class MCPToolRouter:
 
 
 class AgentLoop:
-    def __init__(self, router: MCPToolRouter, emit: Callable[[dict], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        router: MCPToolRouter,
+        emit: Callable[[dict], Awaitable[None]],
+        wait_for_roll: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         self.router = router
         self.emit = emit
+        # Dice rolls are player-triggered: the turn blocks here until the
+        # player clicks the die (the callback owns the timeout backstop).
+        # None (evals, direct use) keeps rolls instant.
+        self.wait_for_roll = wait_for_roll
         self.client = anthropic.AsyncAnthropic()
 
     async def run_turn(
@@ -242,6 +269,18 @@ class AgentLoop:
                 messages=messages,
             ) as stream:
                 async for event in stream:
+                    # Narration resuming after a tool round-trip (or thinking
+                    # block) starts a fresh text block glued straight onto the
+                    # previous sentence — force a paragraph break, in the live
+                    # stream and the stored narrative alike.
+                    if (
+                        event.type == "content_block_start"
+                        and event.content_block.type == "text"
+                        and narrative_parts
+                        and not narrative_parts[-1].endswith("\n")
+                    ):
+                        narrative_parts.append("\n\n")
+                        await self.emit({"type": "narrative_chunk", "text": "\n\n"})
                     if event.type == "content_block_delta" and event.delta.type == "text_delta":
                         narrative_parts.append(event.delta.text)
                         await self.emit({"type": "narrative_chunk", "text": event.delta.text})
@@ -267,7 +306,9 @@ class AgentLoop:
                     continue
 
                 if block.name == "suggest_actions":
-                    actions = block.input.get("actions") or []
+                    # strict:true guarantees {text, character} items; empty
+                    # text is the only junk worth filtering.
+                    actions = [a for a in (block.input.get("actions") or []) if a.get("text")]
                     if actions:
                         suggested_actions = actions[:4]
                     got_suggest_actions = True
@@ -276,9 +317,20 @@ class AgentLoop:
                     )
                     continue
 
+                if block.name == "roll" and self.wait_for_roll is not None:
+                    expression = str(block.input.get("expression", ""))
+                    await self.emit({"type": "dice_pending", "expression": expression})
+                    await self.wait_for_roll(expression)
+
                 await self.emit({"type": "tool_call", "tool": block.name, "status": "running"})
                 try:
                     result = await self.router.call(block.name, block.input)
+                    # Broadcast the actual numbers — the click that released
+                    # the wait deserves a visible die, not just prose.
+                    if block.name == "roll" and not result["is_error"]:
+                        rolled = json.loads(result["text"])
+                        if "total" in rolled:
+                            await self.emit({"type": "dice_result", **rolled})
                     # ponytail: move_party is the only write tool so far, so
                     # it's the only source of world_updates. Add a case per new
                     # write tool (e.g. give_item, start_quest) as they show up.

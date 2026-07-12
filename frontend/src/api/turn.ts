@@ -37,3 +37,17 @@ export async function postTurn(
   const body = (await response.json()) as { response: StructuredResponse }
   return body.response
 }
+
+/** Release a turn that's blocked on a pending dice roll. */
+export async function postRoll(roomCode: string, token: string): Promise<void> {
+  const response = await fetch(`/api/games/${encodeURIComponent(roomCode)}/roll`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  // 409 = the roll already resolved (double-click, or the server-side
+  // timeout beat the click) — not an error worth surfacing.
+  if (!response.ok && response.status !== 409) {
+    throw new Error(`roll request failed: ${response.status}`)
+  }
+}

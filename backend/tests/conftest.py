@@ -64,7 +64,7 @@ class FakeAgentLoop:
     response = CANNED_RESPONSE
     delay = 0.0
 
-    def __init__(self, router, emit):
+    def __init__(self, router, emit, wait_for_roll=None):
         self.emit = emit
 
     async def run_turn(self, game_id, roster, world, history, player_action):
@@ -101,5 +101,6 @@ def client(world_db, monkeypatch):
     main.subscribers.clear()
     main.active_turns.clear()
     main.pending_join_notices.clear()
+    main.pending_rolls.clear()
     with TestClient(main.app) as c:
         yield c

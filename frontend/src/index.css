@@ -11,10 +11,42 @@ body,
 }
 
 body {
-  background: #0b0b0f;
+  /* Layered atmosphere, top to bottom: a violet cast bleeding from above, a
+     faint ember glow from below (the two UI accent hues), then a diamond
+     lattice at ~2% white that reads as dressed stone. All far below
+     text-contrast territory — content panels stay opaque on top of it. */
+  background-color: #0b0b0f;
+  background-image:
+    radial-gradient(120rem 60rem at 50% -20%, rgba(139, 92, 246, 0.07), transparent 60%),
+    radial-gradient(90rem 50rem at 50% 120%, rgba(217, 119, 6, 0.05), transparent 60%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Cpath d='M0 24L24 0l24 24-24 24z' fill='none' stroke='%23ffffff' stroke-opacity='0.022'/%3E%3C/svg%3E");
+  background-repeat: no-repeat, no-repeat, repeat;
   color: #e5e4e7;
 }
 
 .font-narrative {
   font-family: 'Spectral', Georgia, serif;
+}
+
+/* Dice roll: tumble while the result is in flight, one settle pop on reveal.
+   Rotation only wiggles ±14° — a flat icon spun full circle reads as a
+   loading spinner, not a die. */
+@keyframes dice-tumble {
+  0%   { transform: rotate(0deg) translateY(0); }
+  25%  { transform: rotate(14deg) translateY(-3px); }
+  50%  { transform: rotate(-10deg) translateY(1px); }
+  75%  { transform: rotate(8deg) translateY(-2px); }
+  100% { transform: rotate(0deg) translateY(0); }
+}
+.dice-tumble {
+  animation: dice-tumble 0.45s ease-in-out infinite;
+}
+
+@keyframes dice-settle {
+  0%   { transform: scale(1.35) rotate(-6deg); }
+  60%  { transform: scale(0.95) rotate(2deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.dice-settle {
+  animation: dice-settle 0.35s ease-out;
 }

@@ -3,12 +3,17 @@ export interface WorldUpdate {
   [key: string]: unknown
 }
 
+/** A suggested next action; `character` names the only party member it's
+ * meant for (null = anyone). Bare strings are pre-targeting turns from
+ * old games — treated as for-anyone. */
+export type SuggestedAction = string | { text: string; character: string | null }
+
 export interface StructuredResponse {
   narrative: string
   location: string
   exits: Record<string, string>
   visible_npcs: string[]
-  suggested_actions: string[]
+  suggested_actions: SuggestedAction[]
   world_updates: WorldUpdate[]
 }
 
@@ -48,8 +53,27 @@ export interface PlayerJoinedEvent {
   name: string
 }
 
+export interface PlayerLeftEvent {
+  type: 'player_left'
+  name: string
+}
+
 export interface TurnErrorEvent {
   type: 'turn_error'
+}
+
+/** The turn is paused server-side until a player clicks the die. */
+export interface DicePendingEvent {
+  type: 'dice_pending'
+  expression: string
+}
+
+export interface DiceResultEvent {
+  type: 'dice_result'
+  expression: string
+  rolls: number[]
+  modifier: number
+  total: number
 }
 
 /** Everything the per-room SSE stream can carry. */
@@ -59,7 +83,10 @@ export type RoomEvent =
   | TurnCompleteEvent
   | TurnStartedEvent
   | PlayerJoinedEvent
+  | PlayerLeftEvent
   | TurnErrorEvent
+  | DicePendingEvent
+  | DiceResultEvent
 
 export interface LogEntry {
   role: 'player' | 'narrator' | 'system'
@@ -75,6 +102,13 @@ export interface LogEntry {
 export interface PartyMember {
   name: string
   description: string
+}
+
+/** A ready pool world offered on the new-game menu. */
+export interface World {
+  id: string
+  title: string
+  concept: string
 }
 
 /** This browser's identity in one room, persisted to localStorage. */
@@ -95,7 +129,9 @@ export interface GameSnapshot {
   location: string
   exits: Record<string, string>
   visible_npcs: string[]
-  suggested_actions: string[]
+  suggested_actions: SuggestedAction[]
   turn_in_progress: boolean
   actor: string | null
+  // Dice expression a mid-flight turn is blocked on, for reconnects.
+  pending_roll: string | null
 }

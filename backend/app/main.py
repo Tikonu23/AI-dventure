@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 
 CLEANUP_INTERVAL_SECONDS = 3600
 IDLE_GAME_DAYS = 30
-# How many generated worlds to keep ready so a new game starts instantly.
-WORLD_POOL_SIZE = int(os.environ.get("WORLD_POOL_SIZE", "1"))
+# How many generated worlds to keep ready — players pick from this menu
+# when starting a new game, so it's also the size of that choice.
+WORLD_POOL_SIZE = int(os.environ.get("WORLD_POOL_SIZE", "3"))
 
 router = MCPToolRouter()
 
@@ -49,6 +50,13 @@ active_turns: dict[str, str] = {}
 # whole history blob at turn end, so writing the join notice into the DB
 # mid-turn would be lost. Drained into history at the next turn's start.
 pending_join_notices: dict[str, list[str]] = {}
+# game_id -> (release event, dice expression). The model turn blocks on the
+# event until a player clicks the die; the expression rides along so /state
+# can rehydrate the prompt for a reconnecting client.
+pending_rolls: dict[str, tuple[asyncio.Event, str]] = {}
+# Auto-roll backstop: a turn holds the room's turn lock, so an AFK player
+# must not be able to deadlock the whole party.
+ROLL_WAIT_SECONDS = 60
 
 
 async def broadcast(game_id: str, event: dict) -> None:
@@ -111,6 +119,8 @@ app = FastAPI(lifespan=lifespan)
 class JoinRequest(BaseModel):
     name: str = Field(min_length=1, max_length=30)
     description: str = Field(min_length=1, max_length=500)
+    # Chosen world from GET /worlds — create only; /join ignores it.
+    world_id: str | None = None
 
 
 class TurnRequest(BaseModel):
@@ -131,8 +141,24 @@ def _require_player(game_id: str, token: str) -> dict:
     return player
 
 
+@app.get("/worlds")
+async def list_worlds() -> list[dict]:
+    """Ready pool worlds for the new-game menu: [{id, title, concept}]."""
+    return db.list_ready_worlds()
+
+
 @app.post("/games")
 async def create_game(req: JoinRequest) -> dict:
+    if req.world_id:
+        world = db.claim_world(req.world_id)
+        if world is None:
+            # Claimed between menu render and click (or never real) — an
+            # honest 409 so the client refreshes the menu, rather than
+            # silently starting a world the player didn't pick.
+            raise HTTPException(409, {"code": "world_taken"})
+        pool_wake.set()
+        return db.create_game(req.name, req.description, world)
+
     world = db.claim_world()
     if world is None:
         # Pool empty (burst of creates, or generation has been failing) —
@@ -215,7 +241,53 @@ async def game_state(game_id: str, token: str) -> dict:
         **world,
         "turn_in_progress": game_id in active_turns,
         "actor": active_turns.get(game_id),
+        "pending_roll": pending_rolls[game_id][1] if game_id in pending_rolls else None,
     }
+
+
+class TokenRequest(BaseModel):
+    token: str
+
+
+@app.post("/games/{game_id}/roll")
+async def resolve_roll(game_id: str, req: TokenRequest) -> dict:
+    """Release a turn blocked on a pending dice roll."""
+    game_id = game_id.upper()
+    _require_player(game_id, req.token)
+    # ponytail: any party member's click releases the die, not just the
+    # actor's — the UI only offers the button to the actor; gate by player
+    # id here if that ever needs enforcing.
+    pending = pending_rolls.get(game_id)
+    if pending is None:
+        raise HTTPException(409, "no roll pending")
+    pending[0].set()
+    return {"ok": True}
+
+
+@app.post("/games/{game_id}/leave")
+async def leave_game(game_id: str, req: TokenRequest) -> dict:
+    game_id = game_id.upper()
+    player = _require_player(game_id, req.token)
+    result = db.remove_player(game_id, req.token)
+    name = player["name"]
+
+    # Last one out — the room and its single-use world die now rather than
+    # lingering until the 30-day idle cleanup.
+    if result["remaining"] == 0:
+        db.delete_game(game_id)
+        return {"ok": True}
+
+    # Mirror the join flow: the model hears about it via a history notice
+    # (deferred if a turn is streaming — save_turn would clobber it),
+    # everyone else via a log row + broadcast.
+    notice = f"[System note: {name} leaves the party]"
+    if game_id in active_turns:
+        pending_join_notices.setdefault(game_id, []).append(notice)
+    else:
+        db.append_history_user_message(game_id, notice)
+    db.append_log(game_id, "system", f"{name} leaves the party.")
+    await broadcast(game_id, {"type": "player_left", "name": name})
+    return {"ok": True}
 
 
 @app.get("/games/{game_id}/events")
@@ -287,7 +359,20 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
         game = db.get_game(game_id)
         world = {"title": game["world_title"], "concept": game["world_concept"]}
         roster = db.list_players(game_id)
-        agent = AgentLoop(router, emit=lambda event: broadcast(game_id, event))
+        async def wait_for_roll(expression: str) -> None:
+            release = asyncio.Event()
+            pending_rolls[game_id] = (release, expression)
+            try:
+                await asyncio.wait_for(release.wait(), timeout=ROLL_WAIT_SECONDS)
+            except TimeoutError:
+                # Nobody clicked — roll anyway rather than hold the room.
+                pass
+            finally:
+                pending_rolls.pop(game_id, None)
+
+        agent = AgentLoop(
+            router, emit=lambda event: broadcast(game_id, event), wait_for_roll=wait_for_roll
+        )
         structured, new_history = await agent.run_turn(game_id, roster, world, history, action)
 
         log_entries = []

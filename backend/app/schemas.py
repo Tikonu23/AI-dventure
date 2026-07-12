@@ -9,7 +9,21 @@ through MCP tool calls; it is not an instruction the backend applies after
 the fact.
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class SuggestedAction(BaseModel):
+    text: str
+    # Player character this suggestion is for; None = anyone can take it.
+    # The frontend hides suggestions targeted at other characters.
+    character: str | None = None
+
+    # Bare strings (pre-targeting turns in old games, code-side fallbacks)
+    # coerce to for-anyone rather than forcing a data migration.
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_bare_string(cls, value):
+        return {"text": value} if isinstance(value, str) else value
 
 
 class WorldUpdate(BaseModel):
@@ -26,5 +40,5 @@ class StructuredResponse(BaseModel):
     location: str
     exits: dict[str, str]
     visible_npcs: list[str]
-    suggested_actions: list[str] = Field(min_length=1, max_length=4)
+    suggested_actions: list[SuggestedAction] = Field(min_length=1, max_length=4)
     world_updates: list[WorldUpdate] = Field(default_factory=list)

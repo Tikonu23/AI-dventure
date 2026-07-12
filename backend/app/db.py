@@ -179,19 +179,36 @@ def insert_world(world: dict, status: str = "ready") -> str:
         conn.close()
 
 
-def claim_world() -> dict | None:
-    """Atomically take one ready world out of the pool for a new game.
-    Returns {id, title, concept, starting_location_id} or None if the pool
-    is empty (caller then generates on demand)."""
+def claim_world(world_id: str | None = None) -> dict | None:
+    """Atomically take one ready world out of the pool for a new game —
+    a specific one when world_id is given (None if it's gone or already
+    claimed), else the oldest ready one (None = pool empty, caller then
+    generates on demand)."""
     conn = _connect()
     try:
         row = conn.execute(
             "UPDATE worlds SET status = 'claimed' WHERE id = "
-            "(SELECT id FROM worlds WHERE status = 'ready' ORDER BY created_at LIMIT 1) "
-            "RETURNING id, title, concept, starting_location_id"
+            "(SELECT id FROM worlds WHERE status = 'ready' AND (? IS NULL OR id = ?) "
+            "ORDER BY created_at LIMIT 1) "
+            "RETURNING id, title, concept, starting_location_id",
+            (world_id, world_id),
         ).fetchone()
         conn.commit()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_ready_worlds() -> list[dict]:
+    """The pool as shown to a player choosing a world for a new game."""
+    conn = _connect()
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT id, title, concept FROM worlds WHERE status = 'ready' ORDER BY created_at"
+            )
+        ]
     finally:
         conn.close()
 
@@ -265,6 +282,42 @@ def add_player(game_id: str, name: str, description: str) -> dict | None:
         player = _insert_player(conn, game_id, name, description)
         conn.commit()
         return player
+    finally:
+        conn.close()
+
+
+def remove_player(game_id: str, token: str) -> dict | None:
+    """Delete a player from a game. Returns {name, remaining} (remaining =
+    players still in the room) or None if the token doesn't match."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "DELETE FROM game_players WHERE game_id = ? AND token = ? RETURNING name",
+            (game_id, token),
+        ).fetchone()
+        if row is None:
+            return None
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM game_players WHERE game_id = ?", (game_id,)
+        ).fetchone()[0]
+        conn.commit()
+        return {"name": row["name"], "remaining": remaining}
+    finally:
+        conn.close()
+
+
+def delete_game(game_id: str) -> None:
+    """Delete a game and its single-use world; cascades players, log rows,
+    and all world entities. Same order as delete_idle_games: game first —
+    games.world_id has no ON DELETE, so the world must outlive the row
+    pointing at it."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT world_id FROM games WHERE id = ?", (game_id,)).fetchone()
+        if row is not None:
+            conn.execute("DELETE FROM games WHERE id = ?", (game_id,))
+            conn.execute("DELETE FROM worlds WHERE id = ?", (row["world_id"],))
+            conn.commit()
     finally:
         conn.close()
 
