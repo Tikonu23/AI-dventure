@@ -34,6 +34,14 @@ export function shouldReplayBufferedEvent(event: RoomEvent, snapshot: GameSnapsh
   // Same dedupe for departures — the snapshot already reflects them.
   if (event.type === 'player_left' && !snapshot.players.some((p) => p.name === event.name))
     return false
+  // Stat changes and endings from a finished turn are already baked into
+  // the snapshot's players/status — replaying them could regress the HUD.
+  if (
+    (event.type === 'player_stats' || event.type === 'game_over') &&
+    !snapshot.turn_in_progress
+  ) {
+    return false
+  }
   return true
 }
 

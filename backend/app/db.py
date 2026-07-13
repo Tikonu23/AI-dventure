@@ -102,7 +102,11 @@ def init_db() -> None:
                 history_json TEXT NOT NULL DEFAULT '[]',
                 last_response_json TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                last_active_at TEXT NOT NULL DEFAULT (datetime('now'))
+                last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
+                -- 'active' | 'won' | 'lost'. Won is model-triggered against
+                -- the world's resolution fact; lost is flipped in code when
+                -- the last living player hits 0 HP.
+                status TEXT NOT NULL DEFAULT 'active'
             );
             CREATE TABLE IF NOT EXISTS game_players (
                 id TEXT PRIMARY KEY,
@@ -110,7 +114,13 @@ def init_db() -> None:
                 token TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 description TEXT NOT NULL,
-                joined_at TEXT NOT NULL DEFAULT (datetime('now'))
+                joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+                -- Fixed pools (see PLAYER_MAX_HP/MANA); the model judges
+                -- damage magnitude from the description, code owns the math.
+                hp INTEGER NOT NULL DEFAULT 100,
+                max_hp INTEGER NOT NULL DEFAULT 100,
+                mana INTEGER NOT NULL DEFAULT 100,
+                max_mana INTEGER NOT NULL DEFAULT 100
             );
             -- Server-global key/value settings (e.g. backdrop_mode) — they
             -- affect shared resources like the world pool, so they live
@@ -131,11 +141,19 @@ def init_db() -> None:
             );
             """
         )
-        # DBs created before backdrops existed — additive, idempotent.
-        try:
-            conn.execute("ALTER TABLE worlds ADD COLUMN backdrop_svg TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        # Additive, idempotent migrations for DBs predating each feature.
+        for ddl in (
+            "ALTER TABLE worlds ADD COLUMN backdrop_svg TEXT",
+            "ALTER TABLE games ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            "ALTER TABLE game_players ADD COLUMN hp INTEGER NOT NULL DEFAULT 100",
+            "ALTER TABLE game_players ADD COLUMN max_hp INTEGER NOT NULL DEFAULT 100",
+            "ALTER TABLE game_players ADD COLUMN mana INTEGER NOT NULL DEFAULT 100",
+            "ALTER TABLE game_players ADD COLUMN max_mana INTEGER NOT NULL DEFAULT 100",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.commit()
     finally:
         conn.close()
@@ -370,7 +388,7 @@ def get_game(game_id: str) -> dict | None:
     try:
         row = conn.execute(
             "SELECT g.id, g.world_id, g.location_id, g.last_response_json, g.last_active_at, "
-            "w.title AS world_title, w.concept AS world_concept, "
+            "g.status, w.title AS world_title, w.concept AS world_concept, "
             "w.backdrop_svg AS world_backdrop "
             "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
             (game_id,),
@@ -388,7 +406,8 @@ def list_players(game_id: str) -> list[dict]:
             for r in conn.execute(
                 # rowid, not joined_at: same-second joins tie on the
                 # timestamp and uuid PKs sort randomly — rowid is insert order.
-                "SELECT name, description FROM game_players WHERE game_id = ? ORDER BY rowid",
+                "SELECT name, description, hp, max_hp, mana, max_mana "
+                "FROM game_players WHERE game_id = ? ORDER BY rowid",
                 (game_id,),
             )
         ]
@@ -400,7 +419,7 @@ def get_player_by_token(game_id: str, token: str) -> dict | None:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT id, name, description FROM game_players WHERE game_id = ? AND token = ?",
+            "SELECT id, name, description, hp FROM game_players WHERE game_id = ? AND token = ?",
             (game_id, token),
         ).fetchone()
         return dict(row) if row else None

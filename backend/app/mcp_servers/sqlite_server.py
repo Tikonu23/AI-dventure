@@ -110,9 +110,10 @@ def get_npc(npc_id: str) -> dict:
 
 @mcp.tool()
 def get_party(game_id: str) -> dict:
-    """Returns {game_id, location_id} — the party's current position (the
-    whole party shares one location). Returns {"error": ...} if game_id
-    doesn't exist."""
+    """Returns {game_id, location_id, players} — the party's current position
+    (the whole party shares one location) and each member's current state:
+    {name, hp, max_hp, mana, max_mana, dead}. Returns {"error": ...} if
+    game_id doesn't exist."""
     conn = _connect()
     try:
         row = conn.execute(
@@ -120,7 +121,89 @@ def get_party(game_id: str) -> dict:
         ).fetchone()
         if row is None:
             return {"error": f"unknown game '{game_id}'"}
-        return {"game_id": row["id"], "location_id": row["location_id"]}
+        players = [
+            {**dict(r), "dead": r["hp"] == 0}
+            for r in conn.execute(
+                "SELECT name, hp, max_hp, mana, max_mana FROM game_players "
+                "WHERE game_id = ? ORDER BY rowid",
+                (game_id,),
+            )
+        ]
+        return {"game_id": row["id"], "location_id": row["location_id"], "players": players}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def adjust_player_stats(game_id: str, player_name: str, hp_delta: int = 0, mana_delta: int = 0) -> dict:
+    """Apply damage, healing, mana spend, or mana recovery to one party
+    member. Negative deltas subtract (damage / casting cost), positive add
+    (healing / rest). Values are clamped to 0..max in code — narrate ONLY
+    the numbers this returns. At 0 HP the character is dead, permanently:
+    the dead cannot be healed or act. If this kills the last living member,
+    the game is lost (game_lost: true) — narrate the party's end.
+    Returns {player, hp, max_hp, mana, max_mana, dead, game_lost}."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            # ponytail: matched by name — names aren't guaranteed unique in a
+            # room; switch to ids if that ever bites (same note as the UI).
+            "SELECT id, hp, max_hp, mana, max_mana FROM game_players "
+            "WHERE game_id = ? AND name = ?",
+            (game_id, player_name),
+        ).fetchone()
+        if row is None:
+            return {"error": f"no player named '{player_name}' in game '{game_id}'"}
+        if row["hp"] == 0:
+            return {"error": f"{player_name} is dead — the dead cannot be healed or harmed"}
+
+        hp = max(0, min(row["max_hp"], row["hp"] + hp_delta))
+        mana = max(0, min(row["max_mana"], row["mana"] + mana_delta))
+        conn.execute(
+            "UPDATE game_players SET hp = ?, mana = ? WHERE id = ?", (hp, mana, row["id"])
+        )
+
+        # Loss is mechanical, not model judgment: last living member at 0 HP
+        # flips the game in the same transaction the death happened in.
+        game_lost = False
+        if hp == 0:
+            alive = conn.execute(
+                "SELECT COUNT(*) FROM game_players WHERE game_id = ? AND hp > 0", (game_id,)
+            ).fetchone()[0]
+            if alive == 0:
+                conn.execute(
+                    "UPDATE games SET status = 'lost' WHERE id = ? AND status = 'active'",
+                    (game_id,),
+                )
+                game_lost = True
+        conn.commit()
+        return {
+            "player": player_name,
+            "hp": hp,
+            "max_hp": row["max_hp"],
+            "mana": mana,
+            "max_mana": row["max_mana"],
+            "dead": hp == 0,
+            "game_lost": game_lost,
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def complete_game(game_id: str) -> dict:
+    """Declare the campaign WON. Call this exactly once, only when the
+    world's pre-authored 'resolution' fact has genuinely been satisfied —
+    then narrate the ending. No further turns can be taken afterward."""
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            "UPDATE games SET status = 'won' WHERE id = ? AND status = 'active'", (game_id,)
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return {"error": f"game '{game_id}' does not exist or has already ended"}
+        return {"game_id": game_id, "status": "won"}
     finally:
         conn.close()
 

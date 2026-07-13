@@ -169,6 +169,10 @@ export function JoinScreen({ onSession, initialRoomCode }: Props) {
                   <button
                     type="button"
                     onClick={() => {
+                      // Same confirm pattern as Leave — a description is not
+                      // recoverable once the roster forgets it.
+                      if (!window.confirm(`Delete ${c.name}? Their description is lost with them.`))
+                        return
                       deleteCharacter(c.name)
                       setCharacters(loadCharacters())
                     }}

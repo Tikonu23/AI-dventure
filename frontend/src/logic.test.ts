@@ -22,7 +22,10 @@ function snapshot(overrides: Partial<GameSnapshot> = {}): GameSnapshot {
     game_id: 'ROOM1',
     world_title: 'T',
     world_backdrop: null,
-    players: [{ name: 'Thorin', description: 'a dwarf' }],
+    players: [
+      { name: 'Thorin', description: 'a dwarf', hp: 100, max_hp: 100, mana: 100, max_mana: 100 },
+    ],
+    status: 'active',
     log: [],
     last_log_id: 10,
     location: 'Gate',
@@ -81,6 +84,24 @@ describe('shouldReplayBufferedEvent', () => {
     } satisfies RoomEvent
     expect(shouldReplayBufferedEvent(started, snapshot({ turn_in_progress: false }))).toBe(false)
     expect(shouldReplayBufferedEvent(started, snapshot({ turn_in_progress: true }))).toBe(true)
+  })
+
+  it('drops stats/game_over from finished turns (snapshot already has them)', () => {
+    const stats = {
+      type: 'player_stats',
+      player: 'Thorin',
+      hp: 50,
+      max_hp: 100,
+      mana: 100,
+      max_mana: 100,
+      dead: false,
+      game_lost: false,
+    } satisfies RoomEvent
+    const over = { type: 'game_over', outcome: 'lost' } satisfies RoomEvent
+    expect(shouldReplayBufferedEvent(stats, snapshot({ turn_in_progress: false }))).toBe(false)
+    expect(shouldReplayBufferedEvent(over, snapshot({ turn_in_progress: false }))).toBe(false)
+    expect(shouldReplayBufferedEvent(stats, snapshot({ turn_in_progress: true }))).toBe(true)
+    expect(shouldReplayBufferedEvent(over, snapshot({ turn_in_progress: true }))).toBe(true)
   })
 
   it('dedupes joins and leaves against the snapshot roster', () => {

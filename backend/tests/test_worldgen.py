@@ -108,7 +108,13 @@ def test_insert_prefixes_ids_and_maps_facts(world_db):
         exit_targets = {r[0] for r in conn.execute("SELECT to_location_id FROM exits WHERE world_id = ?", (world_id,))}
         assert exit_targets <= location_ids
         fact_entities = {r[0] for r in conn.execute("SELECT entity_id FROM world_facts WHERE world_id = ?", (world_id,))}
-        assert fact_entities == {f"{world_id}:collector", f"{world_id}:ossuary", f"{world_id}:aldric"}
+        # World-level facts (the resolution) store the bare world id.
+        assert fact_entities == {
+            world_id,
+            f"{world_id}:collector",
+            f"{world_id}:ossuary",
+            f"{world_id}:aldric",
+        }
     finally:
         conn.close()
 

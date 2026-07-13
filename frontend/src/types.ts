@@ -58,6 +58,23 @@ export interface PlayerLeftEvent {
   name: string
 }
 
+/** A stat change landed mid-turn (adjust_player_stats executed). */
+export interface PlayerStatsEvent {
+  type: 'player_stats'
+  player: string
+  hp: number
+  max_hp: number
+  mana: number
+  max_mana: number
+  dead: boolean
+  game_lost: boolean
+}
+
+export interface GameOverEvent {
+  type: 'game_over'
+  outcome: 'won' | 'lost'
+}
+
 export interface TurnErrorEvent {
   type: 'turn_error'
 }
@@ -88,6 +105,8 @@ export type RoomEvent =
   | TurnStartedEvent
   | PlayerJoinedEvent
   | PlayerLeftEvent
+  | PlayerStatsEvent
+  | GameOverEvent
   | TurnErrorEvent
   | DicePendingEvent
   | DiceResultEvent
@@ -110,6 +129,10 @@ export interface LogEntry {
 export interface PartyMember {
   name: string
   description: string
+  hp: number
+  max_hp: number
+  mana: number
+  max_mana: number
 }
 
 /** A ready pool world offered on the new-game menu. */
@@ -145,4 +168,5 @@ export interface GameSnapshot {
   actor: string | null
   // Dice expression a mid-flight turn is blocked on, for reconnects.
   pending_roll: string | null
+  status: 'active' | 'won' | 'lost'
 }

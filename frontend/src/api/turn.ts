@@ -28,8 +28,14 @@ export async function postTurn(
     body: JSON.stringify({ token, message, log_player_action: logPlayerAction }),
   })
   if (response.status === 409) {
-    const body = (await response.json()) as { detail?: { actor?: string } }
+    const body = (await response.json()) as { detail?: { code?: string; actor?: string } }
+    if (body.detail?.code === 'game_over') throw new Error('The story has already ended.')
     throw new TurnRejectedError(body.detail?.actor ?? 'another adventurer')
+  }
+  if (response.status === 403) {
+    const body = (await response.json().catch(() => ({}))) as { detail?: { code?: string } }
+    if (body.detail?.code === 'player_dead')
+      throw new Error('Your character is dead — the story goes on without them.')
   }
   if (!response.ok) {
     throw new Error(`turn request failed: ${response.status}`)

@@ -25,10 +25,9 @@ def _loc(world: dict, slug: str) -> str:
 def test_get_party_returns_starting_position(world):
     game = db.create_game("Thorin", "a dwarf warrior", world)
     party = sqlite_server.get_party(game["game_id"])
-    assert party == {
-        "game_id": game["game_id"],
-        "location_id": _loc(world, "dungeon_entrance"),
-    }
+    assert party["game_id"] == game["game_id"]
+    assert party["location_id"] == _loc(world, "dungeon_entrance")
+    assert [p["name"] for p in party["players"]] == ["Thorin"]
 
 
 def test_get_party_unknown_game(world):

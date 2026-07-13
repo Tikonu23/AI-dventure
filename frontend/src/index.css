@@ -50,3 +50,28 @@ body {
 .dice-settle {
   animation: dice-settle 0.35s ease-out;
 }
+
+/* Stat orbs: a rotating rounded-square whose top edge is the liquid surface —
+   the classic CSS "water fill". Two waves at different speeds/opacities give
+   the haze; the wrapper's translateY sets the fill level. */
+@keyframes orb-slosh {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.orb-wave {
+  position: absolute;
+  width: 210%;
+  height: 210%;
+  left: -55%;
+  animation: orb-slosh linear infinite;
+}
+@keyframes orb-haze {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.9; }
+}
+.orb-haze {
+  animation: orb-haze 5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .orb-wave, .orb-haze { animation: none; }
+}

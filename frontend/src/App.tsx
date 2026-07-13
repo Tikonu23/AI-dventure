@@ -6,12 +6,14 @@ import { ActionChips } from './components/ActionChips'
 import { PlayerInput } from './components/PlayerInput'
 import { JoinScreen } from './components/JoinScreen'
 import { DiceRollPrompt } from './components/DiceRollPrompt'
+import { PartyHud } from './components/PartyHud'
+import { StatOrb } from './components/StatOrb'
 import { TitleMenu } from './components/TitleMenu'
 import { postRoll, postTurn, TurnRejectedError } from './api/turn'
 import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
 import { backdropUrl, shouldReplayBufferedEvent, suggestionsFor } from './logic'
-import type { LogEntry, RoomEvent, Session, StructuredResponse } from './types'
+import type { LogEntry, PartyMember, RoomEvent, Session, StructuredResponse } from './types'
 
 const LAST_ROOM_KEY = 'ai-dventure:last-room'
 const sessionKey = (roomCode: string) => `ai-dventure:session:${roomCode}`
@@ -114,7 +116,8 @@ function Game({
     visible_npcs: [],
     suggested_actions: [],
   })
-  const [partyNames, setPartyNames] = useState<string[]>([])
+  const [party, setParty] = useState<PartyMember[]>([])
+  const [status, setStatus] = useState<'active' | 'won' | 'lost'>('active')
   const [worldBackdrop, setWorldBackdrop] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [isHydrating, setIsHydrating] = useState(true)
@@ -216,10 +219,29 @@ function Game({
       })
     } else if (event.type === 'player_joined') {
       setLog((prev) => [...prev, { role: 'system', text: `${event.name} joins the party.` }])
-      setPartyNames((prev) => (prev.includes(event.name) ? prev : [...prev, event.name]))
+      setParty((prev) =>
+        prev.some((p) => p.name === event.name)
+          ? prev
+          : [
+              ...prev,
+              // Fresh joiners start at full pools; the next snapshot or
+              // player_stats event corrects if this client is behind.
+              { name: event.name, description: '', hp: 100, max_hp: 100, mana: 100, max_mana: 100 },
+            ],
+      )
     } else if (event.type === 'player_left') {
       setLog((prev) => [...prev, { role: 'system', text: `${event.name} leaves the party.` }])
-      setPartyNames((prev) => prev.filter((n) => n !== event.name))
+      setParty((prev) => prev.filter((p) => p.name !== event.name))
+    } else if (event.type === 'player_stats') {
+      setParty((prev) =>
+        prev.map((p) =>
+          p.name === event.player
+            ? { ...p, hp: event.hp, max_hp: event.max_hp, mana: event.mana, max_mana: event.max_mana }
+            : p,
+        ),
+      )
+    } else if (event.type === 'game_over') {
+      setStatus(event.outcome)
     } else if (event.type === 'turn_error') {
       setLog((prev) => [
         ...prev,
@@ -276,7 +298,8 @@ function Game({
       const snapshot = await fetchGameState(session.roomCode, session.playerToken)
       document.title = `${snapshot.world_title} — AI-dventure`
       setLog(snapshot.log)
-      setPartyNames(snapshot.players.map((p) => p.name))
+      setParty(snapshot.players)
+      setStatus(snapshot.status)
       setWorldBackdrop(snapshot.world_backdrop)
       setState({
         location: snapshot.location,
@@ -352,6 +375,9 @@ function Game({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.roomCode])
 
+  // ponytail: matched by name, same caveat as everywhere else in this file.
+  const me = party.find((p) => p.name === session.playerName)
+
   function copyInviteLink() {
     // The full URL, not the bare code — friends just paste it and land on
     // the join screen with the room prefilled.
@@ -389,9 +415,9 @@ function Game({
           >
             {copied ? 'Copied!' : `Room ${session.roomCode}`}
           </button>
-          {partyNames.length > 0 && (
+          {party.length > 0 && (
             <span className="hidden md:inline text-xs text-zinc-500 truncate">
-              {partyNames.join(' · ')}
+              {party.map((p) => p.name).join(' · ')}
             </span>
           )}
         </div>
@@ -429,28 +455,53 @@ function Game({
               line up under the text instead of stretching full width. */}
           <div className="w-full max-w-3xl mx-auto">
             {notice && <div className="px-4 sm:px-6 py-1 text-sm text-amber-400">{notice}</div>}
+            {/* Teammates only — your own vitals are the orbs by the input. */}
+            <PartyHud party={party.filter((p) => p.name !== session.playerName)} />
             <NpcRoster npcs={state.visible_npcs} />
             <ActionChips
               exits={state.exits}
               suggestions={suggestionsFor(state.suggested_actions, session.playerName)}
               onSelect={(action) => takeTurn(action, true)}
-              disabled={isStreaming || isHydrating}
+              disabled={isStreaming || isHydrating || status !== 'active'}
             />
-            {pendingRoll !== null && (
-              <DiceRollPrompt
-                key={rollSeq}
-                expression={pendingRoll}
-                // ponytail: matched by name — player names aren't guaranteed
-                // unique in a room; switch to actor_id if that ever bites.
-                canRoll={actor === session.playerName}
-                actor={actor}
-                onRoll={() => void postRoll(session.roomCode, session.playerToken)}
-              />
+            {status !== 'active' ? (
+              // Epilogue: the story is over — input is gone, not just off.
+              <div className="px-4 sm:px-6 py-4 text-center">
+                <p
+                  className={`text-sm font-semibold uppercase tracking-widest ${
+                    status === 'won' ? 'text-amber-300' : 'text-rose-400'
+                  }`}
+                >
+                  {status === 'won' ? 'The tale is told — victory.' : '☠ The party has fallen.'}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  This story has ended. Leave to begin another.
+                </p>
+              </div>
+            ) : (
+              <>
+                {pendingRoll !== null && (
+                  <DiceRollPrompt
+                    key={rollSeq}
+                    expression={pendingRoll}
+                    // ponytail: matched by name — player names aren't guaranteed
+                    // unique in a room; switch to actor_id if that ever bites.
+                    canRoll={actor === session.playerName}
+                    actor={actor}
+                    onRoll={() => void postRoll(session.roomCode, session.playerToken)}
+                  />
+                )}
+                {/* Diablo-style vitals flank the input: blood left, mana right. */}
+                <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 border-t border-zinc-800">
+                  {me && <StatOrb kind="hp" label="Health" value={me.hp} max={me.max_hp} />}
+                  <PlayerInput
+                    onSubmit={(message) => takeTurn(message, true)}
+                    disabled={isStreaming || isHydrating}
+                  />
+                  {me && <StatOrb kind="mana" label="Mana" value={me.mana} max={me.max_mana} />}
+                </div>
+              </>
             )}
-            <PlayerInput
-              onSubmit={(message) => takeTurn(message, true)}
-              disabled={isStreaming || isHydrating}
-            />
           </div>
         </div>
         <AgentActivityPanel activity={activity} />

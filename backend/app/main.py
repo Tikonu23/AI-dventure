@@ -256,6 +256,7 @@ async def game_state(game_id: str, token: str) -> dict:
         "game_id": game_id,
         "world_title": game["world_title"],
         "world_backdrop": game["world_backdrop"],
+        "status": game["status"],
         "players": db.list_players(game_id),
         "log": log_entries,
         "last_log_id": last_log_id,
@@ -341,6 +342,13 @@ async def game_events(game_id: str) -> EventSourceResponse:
 async def turn(game_id: str, req: TurnRequest) -> dict:
     game_id = game_id.upper()
     player = _require_player(game_id, req.token)
+
+    # Ended stories take no more turns, and the dead take no more actions —
+    # both enforced here, not left to the model's memory.
+    if db.get_game(game_id)["status"] != "active":
+        raise HTTPException(409, {"code": "game_over"})
+    if player["hp"] == 0:
+        raise HTTPException(403, {"code": "player_dead"})
 
     # First-come-wins: reject, don't queue. No await between the check and
     # the set, so two near-simultaneous submitters can't both pass.
@@ -432,6 +440,11 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
                 "log_id": log_id,
             },
         )
+        # The turn's tools may have ended the game (complete_game, or the
+        # last death flipping status) — tell the room after the narration.
+        final_status = db.get_game(game_id)["status"]
+        if final_status != "active":
+            await broadcast(game_id, {"type": "game_over", "outcome": final_status})
         return {"response": structured.model_dump()}
     except HTTPException:
         raise

@@ -150,6 +150,11 @@ opens, what an NPC is concealing, a ritual's true cost. Write 4-8 of them. \
 "world" for campaign-level truths. Make them concrete and adjudicable — \
 "the Collector's hood hides a second face that must be addressed by name" \
 beats "the Collector has a secret".
+- Exactly ONE fact must have entity "world" and key "resolution": the \
+concrete, achievable condition that ends the campaign in victory. It must \
+be something a party can actually accomplish through play (destroy, \
+banish, escape, break, answer) — not a mood. The game master will end the \
+campaign when it is genuinely met.
 """
 
 GEN_USER_TEMPLATE = """\
@@ -420,6 +425,14 @@ def validate_world(world: dict) -> None:
         if fact.get("entity") not in valid_entities:
             errors.append(f"fact against unknown entity {fact.get('entity')!r}")
 
+    # The campaign must be winnable: one pre-authored world/resolution fact.
+    resolutions = [
+        f for f in world.get("facts", [])
+        if f.get("entity") == "world" and f.get("key") == "resolution"
+    ]
+    if len(resolutions) != 1:
+        errors.append(f"{len(resolutions)} world/resolution facts, need exactly 1")
+
     if errors:
         raise WorldValidationError(errors)
 
@@ -578,6 +591,16 @@ FALLBACK_WORLD = {
         },
     ],
     "facts": [
+        {
+            "entity": "world",
+            "key": "resolution",
+            "value": (
+                "The haunt ends when the humming beneath the ossuary is "
+                "answered on the femur chimes and the warding litany is "
+                "recited, in its true order, at the drowned altar — silencing "
+                "the chapel and freeing the gate."
+            ),
+        },
         {
             "entity": "collector",
             "key": "weakness",
