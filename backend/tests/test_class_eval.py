@@ -108,7 +108,7 @@ async def test_class_enforcement(tmp_path, action, should_grant):
         )
         roster = db.list_players(game["game_id"])
         agent = AgentLoop(router, emit)
-        structured, _ = await agent.run_turn(
+        structured, _, _ = await agent.run_turn(
             game["game_id"],
             roster,
             {"title": FALLBACK_WORLD["title"], "concept": FALLBACK_WORLD["concept"]},

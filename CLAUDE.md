@@ -1,4 +1,4 @@
-# AI Dungeoneer
+# AI-dventure
 
 An AI-powered group text adventure. Claude acts as a persistent game master, managing world state through MCP tools and returning structured responses the frontend renders directly.
 

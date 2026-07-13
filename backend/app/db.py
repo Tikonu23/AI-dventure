@@ -124,12 +124,19 @@ def init_db() -> None:
         conn.close()
 
 
+def sanitize_player_text(text: str) -> str:
+    """Every player-authored string that reaches the model conversation goes
+    through here. Square brackets are the server's channel there ([Name]:
+    attribution, [System note: ...]) — swap them for parens so no message,
+    name, or description can forge those lines. Newlines stay: multi-line
+    roleplay is legitimate once brackets can't start a fake line."""
+    return text.replace("[", "(").replace("]", ")").strip()
+
+
 def _sanitize_name(name: str) -> str:
-    # Player names end up inside "[Name]:" attribution prefixes in the model
-    # conversation — brackets/newlines would let a player spoof another
-    # speaker or a system note.
-    cleaned = name.replace("[", "").replace("]", "").replace("\n", " ").replace("\r", " ")
-    return cleaned.strip()[:30]
+    # Names additionally flatten newlines and clamp — they're inlined into
+    # single-line attribution prefixes.
+    return sanitize_player_text(name.replace("\n", " ").replace("\r", " "))[:30]
 
 
 def insert_world(world: dict, status: str = "ready") -> str:
@@ -245,13 +252,21 @@ def _insert_player(conn: sqlite3.Connection, game_id: str, name: str, descriptio
     player_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(24)
     sanitized = _sanitize_name(name)
+    # Descriptions reach the SYSTEM prompt (roster block) and join notices —
+    # sanitize at insert so every downstream read is already safe.
+    clean_description = sanitize_player_text(description)
     conn.execute(
         "INSERT INTO game_players (id, game_id, token, name, description) VALUES (?, ?, ?, ?, ?)",
-        (player_id, game_id, token, sanitized, description.strip()),
+        (player_id, game_id, token, sanitized, clean_description),
     )
     # The sanitized name goes back to the client — it's what every other
     # player will see, so the joiner's stored session must match it.
-    return {"player_id": player_id, "player_token": token, "name": sanitized}
+    return {
+        "player_id": player_id,
+        "player_token": token,
+        "name": sanitized,
+        "description": clean_description,
+    }
 
 
 def create_game(name: str, description: str, world: dict) -> dict:
@@ -477,15 +492,19 @@ def load_log(game_id: str) -> tuple[list[dict], int]:
             "WHERE game_id = ? ORDER BY id",
             (game_id,),
         ).fetchall()
-        entries = [
-            {
+        entries = []
+        for r in rows:
+            entry = {
                 "role": r["role"],
                 "player_id": r["player_id"],
                 "player_name": r["player_name"],
                 "text": r["text"],
             }
-            for r in rows
-        ]
+            # Roll rows store their payload as JSON in text — surface it as
+            # an object so the frontend renders the die, not the JSON.
+            if r["role"] == "roll":
+                entry["roll"] = json.loads(r["text"])
+            entries.append(entry)
         return entries, (rows[-1]["id"] if rows else 0)
     finally:
         conn.close()

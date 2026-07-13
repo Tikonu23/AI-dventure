@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useTypewriter } from '../hooks/useTypewriter'
+import { DieRollBox } from './DiceRollPrompt'
 import type { LogEntry } from '../types'
 
 interface Props {
@@ -76,6 +77,8 @@ export function NarrativeStream({ log, streamingText, isStreaming, actor, selfId
             <p key={i} className="text-center text-sm italic text-zinc-500">
               {entry.text}
             </p>
+          ) : entry.role === 'roll' && entry.roll ? (
+            <DieRollBox key={i} roll={entry.roll} animate={entry.animate ?? false} />
           ) : (
             <div key={i} className={proseClasses}>
               <ReactMarkdown>{entry.text}</ReactMarkdown>

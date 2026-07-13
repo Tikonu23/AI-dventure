@@ -184,7 +184,9 @@ async def join_game(game_id: str, req: JoinRequest) -> dict:
     player = db.add_player(game_id, req.name, req.description)
     name = player["name"]  # sanitized form
 
-    notice = f"[System note: {name} joins the party — {req.description.strip()}]"
+    # player["description"], not req.description — the sanitized form can't
+    # close this bracket early and forge its own [System note: ...].
+    notice = f"[System note: {name} joins the party — {player['description']}]"
     if game_id in active_turns:
         pending_join_notices.setdefault(game_id, []).append(notice)
     else:
@@ -350,14 +352,23 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
             history.append({"role": "user", "content": notice})
 
         # The opening "Begin the adventure." is a stage direction, not a
-        # character's utterance — no attribution prefix.
+        # character's utterance — no attribution prefix. It's also the ONLY
+        # legitimate unattributed message: anything else on this channel
+        # would let a client speak to the model in the server's voice.
         if req.log_player_action:
-            action = f"[{player['name']}]: {req.message}"
+            action = f"[{player['name']}]: {db.sanitize_player_text(req.message)}"
         else:
+            if req.message != "Begin the adventure.":
+                raise HTTPException(400, "unattributed messages are reserved for the opening turn")
             action = req.message
 
         game = db.get_game(game_id)
-        world = {"title": game["world_title"], "concept": game["world_concept"]}
+        # "id" powers the tool-arg scope check (entity ids are world-prefixed).
+        world = {
+            "id": game["world_id"],
+            "title": game["world_title"],
+            "concept": game["world_concept"],
+        }
         roster = db.list_players(game_id)
         async def wait_for_roll(expression: str) -> None:
             release = asyncio.Event()
@@ -373,7 +384,9 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
         agent = AgentLoop(
             router, emit=lambda event: broadcast(game_id, event), wait_for_roll=wait_for_roll
         )
-        structured, new_history = await agent.run_turn(game_id, roster, world, history, action)
+        structured, new_history, turn_log = await agent.run_turn(
+            game_id, roster, world, history, action
+        )
 
         log_entries = []
         if req.log_player_action:
@@ -385,7 +398,9 @@ async def turn(game_id: str, req: TurnRequest) -> dict:
                     "text": req.message,
                 }
             )
-        log_entries.append({"role": "narrator", "text": structured.narrative})
+        # Narrator segments + roll rows in stream order — not one blob — so
+        # a reload shows the dice where they landed.
+        log_entries.extend(turn_log)
         structured_json = structured.model_dump_json()
         log_id = db.save_turn(game_id, new_history, structured_json, log_entries)
 

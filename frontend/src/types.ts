@@ -68,12 +68,16 @@ export interface DicePendingEvent {
   expression: string
 }
 
-export interface DiceResultEvent {
-  type: 'dice_result'
+/** A resolved roll — as broadcast live and as persisted in game_log rows. */
+export interface DiceRoll {
   expression: string
   rolls: number[]
   modifier: number
   total: number
+}
+
+export interface DiceResultEvent extends DiceRoll {
+  type: 'dice_result'
 }
 
 /** Everything the per-room SSE stream can carry. */
@@ -89,7 +93,11 @@ export type RoomEvent =
   | DiceResultEvent
 
 export interface LogEntry {
-  role: 'player' | 'narrator' | 'system'
+  role: 'player' | 'narrator' | 'system' | 'roll'
+  roll?: DiceRoll
+  // Client-only: set on rolls that just resolved so their box tumbles in;
+  // rows loaded from the snapshot render already settled.
+  animate?: boolean
   // Set for role 'player' — whose bubble this is. The id (not the name) is
   // what decides mine-vs-teammate styling: names can collide within a room.
   // Snake case to match the backend rows verbatim, like the other

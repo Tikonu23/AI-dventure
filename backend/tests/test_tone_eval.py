@@ -93,7 +93,7 @@ async def test_tone_consistency(tmp_path, player_action):
     async with _fresh_router(tmp_path / "eval_world.db") as router:
         agent = AgentLoop(router, emit)
         # "p1" is the only player row the fresh eval DB seeds.
-        structured, _ = await agent.run_turn("p1", [], player_action)
+        structured, _, _ = await agent.run_turn("p1", [], player_action)
 
     client = anthropic.AsyncAnthropic()
     score, reason = await _judge(client, structured.narrative)

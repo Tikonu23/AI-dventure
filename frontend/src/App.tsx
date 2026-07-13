@@ -10,7 +10,6 @@ import { postRoll, postTurn, TurnRejectedError } from './api/turn'
 import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
 import type {
-  DiceResultEvent,
   LogEntry,
   RoomEvent,
   Session,
@@ -133,10 +132,16 @@ function Game({
   const [isHydrating, setIsHydrating] = useState(true)
   const [actor, setActor] = useState<string | null>(null)
   const [pendingRoll, setPendingRoll] = useState<string | null>(null)
-  const [diceResult, setDiceResult] = useState<DiceResultEvent | null>(null)
   // Remount key so a second roll in the same turn starts the widget fresh
-  // (clicked/revealed are its internal state).
+  // (clicked is its internal state).
   const [rollSeq, setRollSeq] = useState(0)
+  // Synchronous mirror of streamingText — dice_result must read-and-cut the
+  // accumulated text in one event, which state alone can't do.
+  const streamRef = useRef('')
+  // Whether this turn's narrative was already committed in segments around
+  // roll boxes — turn_complete must then keep the split instead of
+  // re-appending the full narrative.
+  const rolledRef = useRef(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   // StrictMode double-invoke guard for the auto-sent opening turn.
@@ -150,6 +155,8 @@ function Game({
       setActor(event.actor)
       setActivity([])
       setStreamingText('')
+      streamRef.current = ''
+      rolledRef.current = false
       // Teammates' dialog lands here, live. The actor's own client skips it —
       // their bubble was already added optimistically in takeTurn.
       if (event.logged && event.actor_id !== session.playerId) {
@@ -178,24 +185,41 @@ function Game({
         return [...prev, { tool: event.tool, status: 'running' }]
       })
     } else if (event.type === 'narrative_chunk') {
+      streamRef.current += event.text
       setStreamingText((prev) => prev + event.text)
     } else if (event.type === 'dice_pending') {
       setPendingRoll(event.expression)
-      setDiceResult(null)
       setRollSeq((seq) => seq + 1)
     } else if (event.type === 'dice_result') {
-      // The widget tumbles then settles on this — the narrative retells the
-      // roll, so nothing is persisted for it.
+      // Anchor the roll where it happened: commit the narrative streamed so
+      // far as its own entry, drop the roll box after it, and stream what
+      // follows below. The box does its own tumble-then-settle on mount.
       setPendingRoll(null)
-      setDiceResult(event)
+      rolledRef.current = true
+      const segment = streamRef.current.trim()
+      streamRef.current = ''
+      setStreamingText('')
+      setLog((prev) => [
+        ...prev,
+        ...(segment ? [{ role: 'narrator', text: segment } as LogEntry] : []),
+        { role: 'roll', text: `${event.expression} = ${event.total}`, roll: event, animate: true },
+      ])
     } else if (event.type === 'turn_complete') {
       const { response } = event
-      setLog((prev) => [...prev, { role: 'narrator', text: response.narrative }])
+      if (rolledRef.current) {
+        // Narrative was committed in segments around roll boxes — append
+        // only the tail, or the boxes would be buried under a full repeat.
+        const tail = streamRef.current.trim()
+        if (tail) setLog((prev) => [...prev, { role: 'narrator', text: tail }])
+      } else {
+        setLog((prev) => [...prev, { role: 'narrator', text: response.narrative }])
+      }
+      rolledRef.current = false
+      streamRef.current = ''
       setStreamingText('')
       setIsStreaming(false)
       setActor(null)
       setPendingRoll(null)
-      setDiceResult(null)
       setState({
         location: response.location,
         exits: response.exits,
@@ -216,17 +240,10 @@ function Game({
       setIsStreaming(false)
       setActor(null)
       setPendingRoll(null)
-      setDiceResult(null)
+      streamRef.current = ''
+      rolledRef.current = false
     }
   }, [session.playerId])
-
-  // The settled die lingers a beat, then clears — turn_complete also clears
-  // it, but the narrative often keeps streaming long after the roll.
-  useEffect(() => {
-    if (!diceResult) return
-    const id = setTimeout(() => setDiceResult(null), 4000)
-    return () => clearTimeout(id)
-  }, [diceResult])
 
   const takeTurn = useCallback(
     async (message: string, logPlayerAction: boolean) => {
@@ -269,7 +286,7 @@ function Game({
   const applySnapshot = useCallback(
     async (buffered?: RoomEvent[]) => {
       const snapshot = await fetchGameState(session.roomCode, session.playerToken)
-      document.title = `${snapshot.world_title} — AI Dungeoneer`
+      document.title = `${snapshot.world_title} — AI-dventure`
       setLog(snapshot.log)
       setPartyNames(snapshot.players.map((p) => p.name))
       setState({
@@ -281,8 +298,9 @@ function Game({
       setIsStreaming(snapshot.turn_in_progress)
       setActor(snapshot.actor)
       setPendingRoll(snapshot.pending_roll)
-      setDiceResult(null)
       setStreamingText('')
+      streamRef.current = ''
+      rolledRef.current = false
       setActivity([])
 
       for (const event of buffered ?? []) {
@@ -383,7 +401,7 @@ function Game({
             whole header into multiple rows on narrow screens. */}
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           <h1 className="text-base sm:text-lg font-semibold tracking-wide text-zinc-100 uppercase whitespace-nowrap">
-            AI Dungeoneer
+            AI-dventure
           </h1>
           <button
             onClick={copyInviteLink}
@@ -439,15 +457,14 @@ function Game({
               onSelect={(action) => takeTurn(action, true)}
               disabled={isStreaming || isHydrating}
             />
-            {(pendingRoll !== null || diceResult !== null) && (
+            {pendingRoll !== null && (
               <DiceRollPrompt
                 key={rollSeq}
-                expression={pendingRoll ?? diceResult!.expression}
+                expression={pendingRoll}
                 // ponytail: matched by name — player names aren't guaranteed
                 // unique in a room; switch to actor_id if that ever bites.
                 canRoll={actor === session.playerName}
                 actor={actor}
-                result={diceResult}
                 onRoll={() => void postRoll(session.roomCode, session.playerToken)}
               />
             )}

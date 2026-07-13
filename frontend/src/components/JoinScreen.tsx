@@ -78,7 +78,7 @@ export function JoinScreen({ onSession, initialRoomCode }: Props) {
     <div className="h-dvh flex justify-center px-6 py-6 overflow-y-auto">
       <form onSubmit={handleSubmit} className="w-full max-w-md space-y-4 my-auto">
         <h1 className="text-lg font-semibold tracking-wide text-zinc-100 uppercase text-center">
-          AI Dungeoneer
+          AI-dventure
         </h1>
         <p className="text-sm text-zinc-500 text-center">
           Forge a character. Your description is your character sheet — the

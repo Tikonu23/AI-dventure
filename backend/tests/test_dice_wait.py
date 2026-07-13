@@ -1,10 +1,11 @@
 """Player-clicked dice: a pending roll blocks the turn until POST /roll
-releases it, /state exposes it for reconnects, and a click with nothing
-pending is rejected."""
+releases it, /state exposes it for reconnects, a click with nothing pending
+is rejected, and persisted roll rows round-trip as objects."""
 
 import asyncio
+import json
 
-from app import main
+from app import db, main
 
 
 def _create(client, name="Thorin"):
@@ -38,6 +39,20 @@ def test_roll_with_nothing_pending_is_409(client):
         f"/games/{created['game_id']}/roll", json={"token": created["player_token"]}
     )
     assert response.status_code == 409
+
+
+def test_roll_log_rows_round_trip_as_objects(client):
+    created = _create(client)
+    game_id = created["game_id"]
+    payload = {"expression": "1d20+2", "rolls": [15], "modifier": 2, "total": 17}
+    db.append_log(game_id, "narrator", "The blade hovers.")
+    db.append_log(game_id, "roll", json.dumps(payload))
+
+    state = client.get(
+        f"/games/{game_id}/state", params={"token": created["player_token"]}
+    ).json()
+    roll_rows = [e for e in state["log"] if e["role"] == "roll"]
+    assert roll_rows and roll_rows[0]["roll"] == payload
 
 
 def test_roll_requires_valid_token(client):

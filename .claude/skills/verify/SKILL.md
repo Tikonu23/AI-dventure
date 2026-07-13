@@ -1,9 +1,9 @@
 ---
 name: verify
-description: Build, launch, and drive AI Dungeoneer end-to-end (backend API + two-browser UI) to verify changes at the real surface.
+description: Build, launch, and drive AI-dventure end-to-end (backend API + two-browser UI) to verify changes at the real surface.
 ---
 
-# Verifying AI Dungeoneer
+# Verifying AI-dventure
 
 ## Launch
 

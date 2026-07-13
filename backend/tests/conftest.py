@@ -79,7 +79,8 @@ class FakeAgentLoop:
             # A real pydantic model in content, like the SDK produces.
             {"role": "assistant", "content": [self.response]},
         ]
-        return self.response, new_history
+        turn_log = [{"role": "narrator", "text": self.response.narrative}]
+        return self.response, new_history, turn_log
 
 
 @pytest.fixture
