@@ -58,7 +58,12 @@ def init_db() -> None:
                 concept TEXT NOT NULL,
                 starting_location_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'ready',  -- 'ready' | 'claimed'
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                -- Scene shown at low opacity while in this world: SVG text
+                -- (backdrop_mode='svg') or a data:image/png URI ('local').
+                -- Name is a misnomer for raster mode; not worth a rename
+                -- migration. NULL = no art.
+                backdrop_svg TEXT
             );
             CREATE TABLE IF NOT EXISTS locations (
                 id TEXT PRIMARY KEY,
@@ -107,6 +112,13 @@ def init_db() -> None:
                 description TEXT NOT NULL,
                 joined_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            -- Server-global key/value settings (e.g. backdrop_mode) — they
+            -- affect shared resources like the world pool, so they live
+            -- here rather than in any browser.
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS game_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
@@ -119,6 +131,11 @@ def init_db() -> None:
             );
             """
         )
+        # DBs created before backdrops existed — additive, idempotent.
+        try:
+            conn.execute("ALTER TABLE worlds ADD COLUMN backdrop_svg TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
     finally:
         conn.close()
@@ -153,9 +170,16 @@ def insert_world(world: dict, status: str = "ready") -> str:
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO worlds (id, title, concept, starting_location_id, status) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (world_id, world["title"], world["concept"], qualify(world["starting_location"]), status),
+            "INSERT INTO worlds (id, title, concept, starting_location_id, status, backdrop_svg) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                world_id,
+                world["title"],
+                world["concept"],
+                qualify(world["starting_location"]),
+                status,
+                world.get("backdrop_svg"),
+            ),
         )
         for loc in world["locations"]:
             conn.execute(
@@ -213,7 +237,8 @@ def list_ready_worlds() -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT id, title, concept FROM worlds WHERE status = 'ready' ORDER BY created_at"
+                "SELECT id, title, concept, backdrop_svg FROM worlds "
+                "WHERE status = 'ready' ORDER BY created_at"
             )
         ]
     finally:
@@ -232,7 +257,8 @@ def get_world(world_id: str) -> dict | None:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT id, title, concept, starting_location_id, status FROM worlds WHERE id = ?",
+            "SELECT id, title, concept, starting_location_id, status, backdrop_svg "
+            "FROM worlds WHERE id = ?",
             (world_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -344,7 +370,8 @@ def get_game(game_id: str) -> dict | None:
     try:
         row = conn.execute(
             "SELECT g.id, g.world_id, g.location_id, g.last_response_json, g.last_active_at, "
-            "w.title AS world_title, w.concept AS world_concept "
+            "w.title AS world_title, w.concept AS world_concept, "
+            "w.backdrop_svg AS world_backdrop "
             "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
             (game_id,),
         ).fetchone()
@@ -506,6 +533,28 @@ def load_log(game_id: str) -> tuple[list[dict], int]:
                 entry["roll"] = json.loads(r["text"])
             entries.append(entry)
         return entries, (rows[-1]["id"] if rows else 0)
+    finally:
+        conn.close()
+
+
+def get_setting(key: str, default: str) -> str:
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
     finally:
         conn.close()
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { breakdown, shouldReplayBufferedEvent, sidesOf, suggestionsFor } from './logic'
+import { backdropUrl, breakdown, shouldReplayBufferedEvent, sidesOf, suggestionsFor } from './logic'
 import type { GameSnapshot, RoomEvent } from './types'
 
 describe('suggestionsFor', () => {
@@ -21,6 +21,7 @@ function snapshot(overrides: Partial<GameSnapshot> = {}): GameSnapshot {
   return {
     game_id: 'ROOM1',
     world_title: 'T',
+    world_backdrop: null,
     players: [{ name: 'Thorin', description: 'a dwarf' }],
     log: [],
     last_log_id: 10,
@@ -88,6 +89,18 @@ describe('shouldReplayBufferedEvent', () => {
     expect(shouldReplayBufferedEvent({ type: 'player_joined', name: 'Mira' }, snap)).toBe(true)
     expect(shouldReplayBufferedEvent({ type: 'player_left', name: 'Mira' }, snap)).toBe(false)
     expect(shouldReplayBufferedEvent({ type: 'player_left', name: 'Thorin' }, snap)).toBe(true)
+  })
+})
+
+describe('backdropUrl', () => {
+  it('passes raster data URIs through verbatim', () => {
+    expect(backdropUrl('data:image/png;base64,AAAA')).toBe('url("data:image/png;base64,AAAA")')
+  })
+
+  it('encodes SVG text into a data URI', () => {
+    expect(backdropUrl('<svg fill="#111"/>')).toBe(
+      `url("data:image/svg+xml,${encodeURIComponent('<svg fill="#111"/>')}")`,
+    )
   })
 })
 

@@ -6,10 +6,11 @@ import { ActionChips } from './components/ActionChips'
 import { PlayerInput } from './components/PlayerInput'
 import { JoinScreen } from './components/JoinScreen'
 import { DiceRollPrompt } from './components/DiceRollPrompt'
+import { TitleMenu } from './components/TitleMenu'
 import { postRoll, postTurn, TurnRejectedError } from './api/turn'
 import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
-import { shouldReplayBufferedEvent, suggestionsFor } from './logic'
+import { backdropUrl, shouldReplayBufferedEvent, suggestionsFor } from './logic'
 import type { LogEntry, RoomEvent, Session, StructuredResponse } from './types'
 
 const LAST_ROOM_KEY = 'ai-dventure:last-room'
@@ -114,6 +115,7 @@ function Game({
     suggested_actions: [],
   })
   const [partyNames, setPartyNames] = useState<string[]>([])
+  const [worldBackdrop, setWorldBackdrop] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [isHydrating, setIsHydrating] = useState(true)
   const [actor, setActor] = useState<string | null>(null)
@@ -275,6 +277,7 @@ function Game({
       document.title = `${snapshot.world_title} — AI-dventure`
       setLog(snapshot.log)
       setPartyNames(snapshot.players.map((p) => p.name))
+      setWorldBackdrop(snapshot.world_backdrop)
       setState({
         location: snapshot.location,
         exits: snapshot.exits,
@@ -364,13 +367,21 @@ function Game({
     // pushing the input below the fold
     // No bg here — the patterned body backdrop (index.css) shows through
     <div className="h-dvh flex flex-col">
+      {/* The world's own scene, above the lattice, below the UI. The SVGs
+          are near-black already, so 30% still leaves text fully readable. */}
+      {worldBackdrop && (
+        <div
+          aria-hidden
+          className="fixed inset-0 -z-10 bg-cover bg-center pointer-events-none"
+          style={{ backgroundImage: backdropUrl(worldBackdrop), opacity: 0.45 }}
+        />
+      )}
       <header className="px-4 sm:px-6 py-3 sm:py-4 border-b border-zinc-800 flex items-center justify-between gap-2 shrink-0">
-        {/* min-w-0 so the party-names span truncates instead of wrapping the
-            whole header into multiple rows on narrow screens. */}
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-          <h1 className="text-base sm:text-lg font-semibold tracking-wide text-zinc-100 uppercase whitespace-nowrap">
-            AI-dventure
-          </h1>
+        {/* Title, room chip, and Leave are rigid; the location pill is the
+            one flexible element — it truncates on narrow screens instead of
+            letting the groups overlap each other. */}
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0 min-w-0">
+          <TitleMenu />
           <button
             onClick={copyInviteLink}
             title="Copy invite link — share it so others can join"
@@ -384,9 +395,9 @@ function Game({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
           {state.location && (
-            <span className="text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 whitespace-nowrap truncate">
+            <span className="min-w-0 text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 truncate">
               {state.location}
             </span>
           )}
@@ -399,7 +410,7 @@ function Game({
               onSessionInvalid()
             }}
             title="Leave this game — you can start or join another"
-            className="text-xs text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 hover:text-red-300 hover:border-red-500/40 whitespace-nowrap"
+            className="shrink-0 text-xs text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 hover:text-red-300 hover:border-red-500/40 whitespace-nowrap"
           >
             Leave
           </button>

@@ -17,6 +17,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import anthropic
 from dotenv import load_dotenv
@@ -141,6 +142,23 @@ def _require_player(game_id: str, token: str) -> dict:
     return player
 
 
+class SettingsUpdate(BaseModel):
+    backdrop_mode: Literal["svg", "local", "grok"]
+
+
+@app.get("/settings")
+async def get_settings() -> dict:
+    return {"backdrop_mode": db.get_setting("backdrop_mode", "svg")}
+
+
+@app.put("/settings")
+async def put_settings(req: SettingsUpdate) -> dict:
+    # ponytail: unauthenticated — same trust model as the rest of the API
+    # (the room code is the capability); add auth when accounts exist.
+    db.set_setting("backdrop_mode", req.backdrop_mode)
+    return {"backdrop_mode": req.backdrop_mode}
+
+
 @app.get("/worlds")
 async def list_worlds() -> list[dict]:
     """Ready pool worlds for the new-game menu: [{id, title, concept}]."""
@@ -237,6 +255,7 @@ async def game_state(game_id: str, token: str) -> dict:
     return {
         "game_id": game_id,
         "world_title": game["world_title"],
+        "world_backdrop": game["world_backdrop"],
         "players": db.list_players(game_id),
         "log": log_entries,
         "last_log_id": last_log_id,

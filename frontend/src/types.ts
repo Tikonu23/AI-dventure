@@ -117,6 +117,8 @@ export interface World {
   id: string
   title: string
   concept: string
+  // Claude-drawn SVG scene; null = no art for this world.
+  backdrop_svg: string | null
 }
 
 /** This browser's identity in one room, persisted to localStorage. */
@@ -131,6 +133,7 @@ export interface Session {
 export interface GameSnapshot {
   game_id: string
   world_title: string
+  world_backdrop: string | null
   players: PartyMember[]
   log: LogEntry[]
   last_log_id: number

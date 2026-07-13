@@ -32,9 +32,13 @@ A full session — forge a character, pick a world, the opening scene streams in
 
 **Generated worlds, ready to play.** A background task keeps a pool of Claude-generated worlds (title, concept, location graph, NPCs, secrets — validated against a schema before insert). New games pick from the pool's menu; an empty pool generates on demand and, failing that, falls back to a hand-authored world.
 
+**Generated backdrops.** Each world also gets its own background art at generation time, shown at low opacity in-game and on the world-choice cards. Three modes, switchable live from the in-app Options menu (a server-global setting — art generates into the shared pool): Claude *draws* an atmospheric SVG scene from the world's own concept (the default — no extra setup), Grok Imagine renders it via the xAI API (`GROK_KEY`), or a local Stable Diffusion server does (`SD_WEBUI_URL`, A1111 API). Raster modes degrade to the SVG mode on any failure, and everything stored is validated first — SVGs pass an active-content sanitizer, rasters get mime-sniffed and size-capped.
+
 **Players hold the dice.** When Claude calls the roll tool, the turn blocks server-side until the acting player clicks the die (with a timeout backstop so nobody can deadlock the room). The result is broadcast, animated, and persisted into the game log exactly where it happened in the narration.
 
 **Prompt-injection defenses.** Player text influences the model, so the model's tool arguments are not trusted: `game_id` is pinned server-side and entity ids are scoped to the game's own world at the single tool-dispatch point (`scope_tool_args`). Player-authored strings are sanitized so the conversation's server-voice channels (`[Name]:` attribution, `[System note: ...]`) can't be forged, and the one unattributed message channel accepts only the fixed opening line. See `backend/tests/test_injection.py` for the contract.
+
+**Characters you keep.** A per-browser roster: characters save automatically when you create or join, reappear as one-tap chips on the join screen, and names stay unique (delete before reuse). No accounts — identity lives in localStorage, same as sessions.
 
 **Multiplayer without a message broker.** A room code is the capability. Every browser subscribes to one SSE stream per room; turn events (streamed narration, tool activity, dice, joins/leaves) fan out to actor and spectators alike. Turns are first-come-wins — a second submitter gets a 409, not a queue. Games, history, and logs live in SQLite and survive restarts, including mid-conversation model content blocks serialized back to the API's input shape.
 
@@ -49,7 +53,7 @@ A full session — forge a character, pick a world, the opening scene streams in
 
 ## Running it
 
-Requires `ANTHROPIC_API_KEY` (in the environment or `backend/.env`).
+Requires `ANTHROPIC_API_KEY` (in the environment, or in a `.env` at the repo root).
 
 ```bash
 # Backend (from backend/)

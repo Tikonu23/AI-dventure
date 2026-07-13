@@ -37,6 +37,14 @@ export function shouldReplayBufferedEvent(event: RoomEvent, snapshot: GameSnapsh
   return true
 }
 
+/** CSS background-image value for a world backdrop: raster data URIs (local
+ * image model) pass through, SVG text gets encoded. background-image never
+ * executes SVG scripts, which is why backdrops render this way. */
+export function backdropUrl(backdrop: string): string {
+  if (backdrop.startsWith('data:image/')) return `url("${backdrop}")`
+  return `url("data:image/svg+xml,${encodeURIComponent(backdrop)}")`
+}
+
 export function sidesOf(expression: string): number {
   return Number(/d(\d+)/i.exec(expression)?.[1] ?? 20)
 }
