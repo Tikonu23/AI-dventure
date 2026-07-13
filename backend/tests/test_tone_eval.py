@@ -9,6 +9,7 @@ Slow and costs real tokens (generation + judging per input) — this is an
 eval, not a unit test; run deliberately, not on every `pytest` invocation.
 """
 
+import copy
 import json
 import os
 from contextlib import asynccontextmanager
@@ -16,11 +17,16 @@ from contextlib import asynccontextmanager
 import anthropic
 import pytest
 
+from app import db
 from app.agent import AgentLoop, MCPToolRouter
+from app.worldgen import FALLBACK_WORLD
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
-)
+pytestmark = [
+    pytest.mark.eval,
+    pytest.mark.skipif(
+        not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
+    ),
+]
 
 FIXED_INPUTS = [
     "I look around.",
@@ -91,9 +97,23 @@ async def test_tone_consistency(tmp_path, player_action):
         pass
 
     async with _fresh_router(tmp_path / "eval_world.db") as router:
+        # Seed the hand-authored template world and one game so the turn has
+        # real party/location state to read.
+        db.init_db()
+        world_id = db.insert_world(copy.deepcopy(FALLBACK_WORLD), status="claimed")
+        created = db.create_game(
+            "Thorin", "a dwarf warrior with a battleaxe and a grudge", db.get_world(world_id)
+        )
+        game_id = created["game_id"]
+        world = {
+            "id": world_id,
+            "title": FALLBACK_WORLD["title"],
+            "concept": FALLBACK_WORLD["concept"],
+        }
         agent = AgentLoop(router, emit)
-        # "p1" is the only player row the fresh eval DB seeds.
-        structured, _, _ = await agent.run_turn("p1", [], player_action)
+        structured, _, _ = await agent.run_turn(
+            game_id, db.list_players(game_id), world, [], f"[Thorin]: {player_action}"
+        )
 
     client = anthropic.AsyncAnthropic()
     score, reason = await _judge(client, structured.narrative)

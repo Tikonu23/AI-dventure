@@ -18,9 +18,12 @@ import pytest
 
 from app.worldgen import DEFAULT_LOCATIONS, DEFAULT_NPCS, generate_world
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
-)
+pytestmark = [
+    pytest.mark.eval,
+    pytest.mark.skipif(
+        not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
+    ),
+]
 
 JUDGE_SYSTEM = """\
 You are grading world-building prose for a text adventure. The target

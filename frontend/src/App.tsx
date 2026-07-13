@@ -9,13 +9,8 @@ import { DiceRollPrompt } from './components/DiceRollPrompt'
 import { postRoll, postTurn, TurnRejectedError } from './api/turn'
 import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
-import type {
-  LogEntry,
-  RoomEvent,
-  Session,
-  StructuredResponse,
-  SuggestedAction,
-} from './types'
+import { shouldReplayBufferedEvent, suggestionsFor } from './logic'
+import type { LogEntry, RoomEvent, Session, StructuredResponse } from './types'
 
 const LAST_ROOM_KEY = 'ai-dventure:last-room'
 const sessionKey = (roomCode: string) => `ai-dventure:session:${roomCode}`
@@ -58,15 +53,6 @@ type WorldState = Pick<
   StructuredResponse,
   'location' | 'exits' | 'visible_npcs' | 'suggested_actions'
 >
-
-// Suggestions tagged for another character are theirs, not ours — showing
-// them only invites actions the GM will refuse.
-function suggestionsFor(suggestions: SuggestedAction[], playerName: string): string[] {
-  return suggestions
-    .map((s) => (typeof s === 'string' ? { text: s, character: null } : s))
-    .filter((s) => !s.character || s.character === playerName)
-    .map((s) => s.text)
-}
 
 function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession(roomFromUrl()))
@@ -303,27 +289,9 @@ function Game({
       rolledRef.current = false
       setActivity([])
 
+      // Rules for what replays live in logic.ts (unit-tested there).
       for (const event of buffered ?? []) {
-        // Chunks/tool calls from a turn that was already mid-flight when the
-        // snapshot was taken are unanchored fragments — drop them;
-        // turn_complete carries the full narrative, so nothing is lost.
-        if (
-          snapshot.turn_in_progress &&
-          (event.type === 'narrative_chunk' || event.type === 'tool_call')
-        ) {
-          continue
-        }
-        // Log rows the snapshot already includes.
-        if (event.type === 'turn_complete' && event.log_id <= snapshot.last_log_id) continue
-        // A buffered turn_started for a turn that FINISHED before the
-        // snapshot was taken — its player bubble is already a log row.
-        if (event.type === 'turn_started' && !snapshot.turn_in_progress) continue
-        if (event.type === 'player_joined' && snapshot.players.some((p) => p.name === event.name))
-          continue
-        // Same dedupe for departures — the snapshot already reflects them.
-        if (event.type === 'player_left' && !snapshot.players.some((p) => p.name === event.name))
-          continue
-        handleEvent(event)
+        if (shouldReplayBufferedEvent(event, snapshot)) handleEvent(event)
       }
       return snapshot
     },

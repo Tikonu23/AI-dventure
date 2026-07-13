@@ -1,7 +1,7 @@
 [project]
 name = "ai-dventure-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Claude-run multiplayer text adventure: FastAPI backend, MCP world tools"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -17,3 +17,11 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "eval: LLM-as-judge test that calls the real API and costs tokens",
+]
+# Evals never run by accident — a plain `pytest` skips them even with an
+# API key present. Run them deliberately: `pytest -m eval`.
+addopts = "-m 'not eval'"

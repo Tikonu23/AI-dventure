@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { breakdown, sidesOf } from '../logic'
 import type { DiceRoll } from '../types'
 
 const FACE_CYCLE_MS = 80
@@ -38,18 +39,6 @@ function D20({ value, className }: { value: string; className: string }) {
       </text>
     </svg>
   )
-}
-
-function breakdown(result: DiceRoll): string {
-  const mod =
-    result.modifier > 0 ? ` + ${result.modifier}` : result.modifier < 0 ? ` − ${-result.modifier}` : ''
-  // A single unmodified die needs no arithmetic shown.
-  if (result.rolls.length === 1 && !mod) return result.expression
-  return `${result.expression}: ${result.rolls.join(' + ')}${mod} = ${result.total}`
-}
-
-function sidesOf(expression: string): number {
-  return Number(/d(\d+)/i.exec(expression)?.[1] ?? 20)
 }
 
 // Cycles random faces while `spinning`, for both the prompt and the box.

@@ -22,9 +22,12 @@ from app import db
 from app.agent import AgentLoop, MCPToolRouter
 from app.worldgen import FALLBACK_WORLD
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
-)
+pytestmark = [
+    pytest.mark.eval,
+    pytest.mark.skipif(
+        not os.environ.get("ANTHROPIC_API_KEY"), reason="requires a live Anthropic API key"
+    ),
+]
 
 # (acting player's message, whether their description supports it)
 CASES = [
