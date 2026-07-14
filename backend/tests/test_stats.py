@@ -56,6 +56,10 @@ def test_last_death_loses_the_game_mechanically(world):
 
 def test_complete_game_wins_once(world):
     game = db.create_game("Thorin", "a dwarf warrior", world)
+    # The fixture world has a 3-step resolution — walk the journey first
+    # (the gate itself is covered in test_journey.py).
+    for step in range(3):
+        sqlite_server.complete_resolution_step(game["game_id"], step)
     assert sqlite_server.complete_game(game["game_id"])["status"] == "won"
     assert db.get_game(game["game_id"])["status"] == "won"
     assert "error" in sqlite_server.complete_game(game["game_id"])

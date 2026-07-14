@@ -1,3 +1,6 @@
+import { MapPanel } from './MapPanel'
+import type { GameMap } from '../types'
+
 export interface ToolActivity {
   tool: string
   status: 'running' | 'done'
@@ -5,13 +8,24 @@ export interface ToolActivity {
 
 interface Props {
   activity: ToolActivity[]
+  map: GameMap
+  currentLocation: string
 }
 
-export function AgentActivityPanel({ activity }: Props) {
+export function AgentActivityPanel({ activity, map, currentLocation }: Props) {
   return (
     // Desktop-only: on a phone this debug-flavored panel would steal most of
-    // the narrative column's width.
+    // the narrative column's width (the map opens from the location pill
+    // there instead).
     <aside className="hidden md:block w-64 shrink-0 border-l border-zinc-800 px-4 py-4 overflow-y-auto">
+      {map.rooms.length > 0 && (
+        <>
+          <h2 className="text-xs uppercase tracking-wide text-zinc-500 mb-3">Map</h2>
+          <div className="mb-5">
+            <MapPanel map={map} currentName={currentLocation} />
+          </div>
+        </>
+      )}
       <h2 className="text-xs uppercase tracking-wide text-zinc-500 mb-3">
         Agent Activity
       </h2>

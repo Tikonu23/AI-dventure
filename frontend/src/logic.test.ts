@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { backdropUrl, breakdown, shouldReplayBufferedEvent, sidesOf, suggestionsFor } from './logic'
+import {
+  backdropUrl,
+  breakdown,
+  layoutMap,
+  shouldReplayBufferedEvent,
+  sidesOf,
+  suggestionsFor,
+} from './logic'
 import type { GameSnapshot, RoomEvent } from './types'
 
 describe('suggestionsFor', () => {
@@ -35,6 +42,8 @@ function snapshot(overrides: Partial<GameSnapshot> = {}): GameSnapshot {
     turn_in_progress: false,
     actor: null,
     pending_roll: null,
+    map: { rooms: [], edges: [], stubs: [] },
+    milestones: { done: 0, total: 0 },
     ...overrides,
   }
 }
@@ -86,6 +95,12 @@ describe('shouldReplayBufferedEvent', () => {
     expect(shouldReplayBufferedEvent(started, snapshot({ turn_in_progress: true }))).toBe(true)
   })
 
+  it('drops milestone events from finished turns', () => {
+    const milestone = { type: 'milestone', done: 1, total: 3 } satisfies RoomEvent
+    expect(shouldReplayBufferedEvent(milestone, snapshot({ turn_in_progress: false }))).toBe(false)
+    expect(shouldReplayBufferedEvent(milestone, snapshot({ turn_in_progress: true }))).toBe(true)
+  })
+
   it('drops stats/game_over from finished turns (snapshot already has them)', () => {
     const stats = {
       type: 'player_stats',
@@ -122,6 +137,69 @@ describe('backdropUrl', () => {
     expect(backdropUrl('<svg fill="#111"/>')).toBe(
       `url("data:image/svg+xml,${encodeURIComponent('<svg fill="#111"/>')}")`,
     )
+  })
+})
+
+describe('layoutMap', () => {
+  it('lays rooms out on a compass grid with stubs a half-step out', () => {
+    const layout = layoutMap({
+      rooms: [
+        { id: 'a', name: 'Gate', description: 'a gate' },
+        { id: 'b', name: 'Crypt', description: 'a crypt' },
+      ],
+      edges: [
+        { from: 'a', direction: 'north', to: 'b' },
+        { from: 'b', direction: 'south', to: 'a' },
+      ],
+      stubs: [{ from: 'b', direction: 'east' }],
+    })
+    const gate = layout.nodes.find((n) => n.id === 'a')!
+    const crypt = layout.nodes.find((n) => n.id === 'b')!
+    expect(crypt.y).toBe(gate.y - 1)
+    expect(crypt.x).toBe(gate.x)
+    // Bidirectional pair drawn as a single link, not a vertical one.
+    expect(layout.links).toHaveLength(1)
+    expect(layout.links[0].vertical).toBe(false)
+    expect(layout.stubs[0]).toEqual({ x: crypt.x + 0.55, y: crypt.y })
+  })
+
+  it('marks up/down passages as vertical links', () => {
+    const layout = layoutMap({
+      rooms: [
+        { id: 'a', name: 'Ossuary', description: 'bones' },
+        { id: 'b', name: 'Chapel', description: 'drowned' },
+      ],
+      edges: [
+        { from: 'a', direction: 'down', to: 'b' },
+        { from: 'b', direction: 'up', to: 'a' },
+      ],
+      stubs: [],
+    })
+    expect(layout.links).toHaveLength(1)
+    expect(layout.links[0].vertical).toBe(true)
+  })
+
+  it('nudges colliding rooms instead of stacking them', () => {
+    // b is north of a; c is west of b AND north of d, where d is west of a —
+    // both paths put c at (-1,-1)... build a simpler direct collision:
+    // two different rooms both claim the cell north of the seed.
+    const layout = layoutMap({
+      rooms: [
+        { id: 'a', name: 'A', description: '' },
+        { id: 'b', name: 'B', description: '' },
+        { id: 'c', name: 'C', description: '' },
+        { id: 'd', name: 'D', description: '' },
+      ],
+      edges: [
+        { from: 'a', direction: 'north', to: 'b' },
+        { from: 'a', direction: 'up', to: 'c' },
+        { from: 'c', direction: 'west', to: 'd' },
+      ],
+      stubs: [],
+    })
+    // d lands where b already is ((0,-1) via up(1,-1)+west(-1,0)) — nudged.
+    const cells = layout.nodes.map((n) => `${n.x},${n.y}`)
+    expect(new Set(cells).size).toBe(4)
   })
 })
 

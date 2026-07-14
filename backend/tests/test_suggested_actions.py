@@ -1,7 +1,18 @@
 """SuggestedAction accepts both shapes: tagged objects from the new tool
-schema, and bare strings from old games' stored turns and code fallbacks."""
+schema, and bare strings from old games' stored turns and code fallbacks.
+Also: literal \\uXXXX escapes the model sometimes emits get decoded."""
 
+from app.agent import unescape_unicode
 from app.schemas import StructuredResponse
+
+
+def test_unescape_decodes_literal_unicode_escapes():
+    assert (
+        unescape_unicode("Weigh his warning \\u2014 ask what waits in the Levy")
+        == "Weigh his warning — ask what waits in the Levy"
+    )
+    # Already-clean text passes through untouched.
+    assert unescape_unicode("Look around — carefully") == "Look around — carefully"
 
 
 def test_bare_strings_and_tagged_objects_both_validate():

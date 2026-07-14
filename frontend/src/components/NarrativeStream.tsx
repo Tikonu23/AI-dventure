@@ -33,18 +33,28 @@ export function NarrativeStream({ log, streamingText, isStreaming, actor, selfId
   // there's nothing left to reveal.
   const revealed = useTypewriter(streamingText)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Whether the reader was at the bottom BEFORE content grew — measuring
+  // after the fact misreads a big one-shot insert (a teammate's bubble)
+  // as the reader having scrolled up, and the stream stops following.
+  const pinnedRef = useRef(true)
 
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    // Stick to the bottom as text streams in, but only if the reader hasn't
+    // Stick to the bottom as content arrives, but only if the reader hasn't
     // deliberately scrolled up to re-read something earlier.
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
-    if (isNearBottom) el.scrollTop = el.scrollHeight
+    if (pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [log, revealed, isStreaming])
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
+    <div
+      ref={containerRef}
+      onScroll={() => {
+        const el = containerRef.current
+        if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+      }}
+      className="flex-1 overflow-y-auto px-4 sm:px-6 py-4"
+    >
       <div className="max-w-3xl mx-auto space-y-4">
         {log.map((entry, i) =>
           entry.role === 'player' ? (

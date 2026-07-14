@@ -91,6 +91,47 @@ def test_accepts_world_level_fact():
     validate_world(world)
 
 
+def test_rejects_missing_resolution():
+    world = _world()
+    del world["resolution"]
+    _expect_error(world, "resolution steps")
+
+
+def test_rejects_too_few_resolution_steps():
+    world = _world()
+    world["resolution"]["steps"] = world["resolution"]["steps"][:1]
+    _expect_error(world, "resolution steps, need")
+
+
+def test_two_step_journey_needs_two_places():
+    world = _world()
+    world["resolution"]["steps"] = world["resolution"]["steps"][:2]
+    validate_world(world)  # two steps, two anchors — fine
+    world["resolution"]["steps"][1]["anchor"] = world["resolution"]["steps"][0]["anchor"]
+    _expect_error(world, "need at least 2")
+
+
+def test_rejects_resolution_step_with_unknown_anchor():
+    world = _world()
+    world["resolution"]["steps"][0]["anchor"] = "nowhere"
+    _expect_error(world, "unknown entity 'nowhere'")
+
+
+def test_rejects_clustered_resolution_steps():
+    # All steps in one place is a tripwire, not a journey.
+    world = _world()
+    for step in world["resolution"]["steps"]:
+        step["anchor"] = "ossuary"
+    _expect_error(world, "need at least 3")
+
+
+def test_rejects_resolution_piled_on_starting_location():
+    world = _world()
+    world["resolution"]["steps"][0]["anchor"] = "dungeon_entrance"
+    world["resolution"]["steps"][1]["anchor"] = "dungeon_entrance"
+    _expect_error(world, "starting location")
+
+
 def test_insert_prefixes_ids_and_maps_facts(world_db):
     world_id = db.insert_world(FALLBACK_WORLD)
     world = db.get_world(world_id)
@@ -108,13 +149,20 @@ def test_insert_prefixes_ids_and_maps_facts(world_db):
         exit_targets = {r[0] for r in conn.execute("SELECT to_location_id FROM exits WHERE world_id = ?", (world_id,))}
         assert exit_targets <= location_ids
         fact_entities = {r[0] for r in conn.execute("SELECT entity_id FROM world_facts WHERE world_id = ?", (world_id,))}
-        # World-level facts (the resolution) store the bare world id.
-        assert fact_entities == {
-            world_id,
-            f"{world_id}:collector",
-            f"{world_id}:ossuary",
+        assert fact_entities == {f"{world_id}:collector", f"{world_id}:ossuary", f"{world_id}:aldric"}
+        # Resolution anchors get world-qualified too.
+        import json
+
+        resolution = json.loads(
+            conn.execute(
+                "SELECT resolution_json FROM worlds WHERE id = ?", (world_id,)
+            ).fetchone()[0]
+        )
+        assert [s["anchor"] for s in resolution["steps"]] == [
             f"{world_id}:aldric",
-        }
+            f"{world_id}:ossuary",
+            f"{world_id}:sunken_chapel",
+        ]
     finally:
         conn.close()
 

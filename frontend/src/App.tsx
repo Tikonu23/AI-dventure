@@ -13,7 +13,17 @@ import { postRoll, postTurn, TurnRejectedError } from './api/turn'
 import { fetchGameState, leaveGame, SessionInvalidError } from './api/games'
 import { subscribeRoom } from './api/events'
 import { backdropUrl, shouldReplayBufferedEvent, suggestionsFor } from './logic'
-import type { LogEntry, PartyMember, RoomEvent, Session, StructuredResponse } from './types'
+import { MapPanel } from './components/MapPanel'
+import type {
+  GameMap,
+  LogEntry,
+  PartyMember,
+  RoomEvent,
+  Session,
+  StructuredResponse,
+} from './types'
+
+const EMPTY_MAP: GameMap = { rooms: [], edges: [], stubs: [] }
 
 const LAST_ROOM_KEY = 'ai-dventure:last-room'
 const sessionKey = (roomCode: string) => `ai-dventure:session:${roomCode}`
@@ -119,6 +129,9 @@ function Game({
   const [party, setParty] = useState<PartyMember[]>([])
   const [status, setStatus] = useState<'active' | 'won' | 'lost'>('active')
   const [worldBackdrop, setWorldBackdrop] = useState<string | null>(null)
+  const [gameMap, setGameMap] = useState<GameMap>(EMPTY_MAP)
+  const [milestones, setMilestones] = useState({ done: 0, total: 0 })
+  const [mapOpen, setMapOpen] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [isHydrating, setIsHydrating] = useState(true)
   const [actor, setActor] = useState<string | null>(null)
@@ -217,6 +230,16 @@ function Game({
         visible_npcs: response.visible_npcs,
         suggested_actions: response.suggested_actions,
       })
+      // The party moved — pull fresh map/milestones only (a full snapshot
+      // re-apply would clobber the live log).
+      if (response.world_updates.some((u) => u.type === 'location_change')) {
+        void fetchGameState(session.roomCode, session.playerToken)
+          .then((snapshot) => {
+            setGameMap(snapshot.map)
+            setMilestones(snapshot.milestones)
+          })
+          .catch(() => {})
+      }
     } else if (event.type === 'player_joined') {
       setLog((prev) => [...prev, { role: 'system', text: `${event.name} joins the party.` }])
       setParty((prev) =>
@@ -242,6 +265,8 @@ function Game({
       )
     } else if (event.type === 'game_over') {
       setStatus(event.outcome)
+    } else if (event.type === 'milestone') {
+      setMilestones({ done: event.done, total: event.total })
     } else if (event.type === 'turn_error') {
       setLog((prev) => [
         ...prev,
@@ -253,7 +278,7 @@ function Game({
       streamRef.current = ''
       rolledRef.current = false
     }
-  }, [session.playerId])
+  }, [session])
 
   const takeTurn = useCallback(
     async (message: string, logPlayerAction: boolean) => {
@@ -301,6 +326,8 @@ function Game({
       setParty(snapshot.players)
       setStatus(snapshot.status)
       setWorldBackdrop(snapshot.world_backdrop)
+      setGameMap(snapshot.map)
+      setMilestones(snapshot.milestones)
       setState({
         location: snapshot.location,
         exits: snapshot.exits,
@@ -422,10 +449,24 @@ function Game({
           )}
         </div>
         <div className="flex items-center gap-2 min-w-0">
-          {state.location && (
-            <span className="min-w-0 text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 truncate">
-              {state.location}
+          {milestones.total > 0 && (
+            <span
+              className="shrink-0 text-[10px] tracking-[0.2em] text-violet-300/90"
+              title={`Journey: ${milestones.done} of ${milestones.total} milestones`}
+            >
+              {'◆'.repeat(milestones.done)}
+              {'◇'.repeat(milestones.total - milestones.done)}
             </span>
+          )}
+          {state.location && (
+            <button
+              type="button"
+              onClick={() => setMapOpen(true)}
+              title="Show the map"
+              className="min-w-0 text-xs uppercase tracking-wider text-zinc-500 border border-zinc-800 rounded-full px-3 py-1 truncate hover:text-zinc-300 hover:border-zinc-600"
+            >
+              {state.location}
+            </button>
           )}
           <button
             onClick={() => {
@@ -504,8 +545,33 @@ function Game({
             )}
           </div>
         </div>
-        <AgentActivityPanel activity={activity} />
+        <AgentActivityPanel activity={activity} map={gameMap} currentLocation={state.location} />
       </div>
+      {/* Map overlay — the phone's path to the map (pill tap), works anywhere. */}
+      {mapOpen && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4"
+          onMouseDown={() => setMapOpen(false)}
+        >
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-100">Map</h2>
+              <button
+                type="button"
+                onClick={() => setMapOpen(false)}
+                className="text-zinc-500 hover:text-zinc-200 text-lg leading-none"
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+            <MapPanel map={gameMap} currentName={state.location} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

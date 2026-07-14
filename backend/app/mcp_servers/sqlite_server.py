@@ -8,6 +8,7 @@ entity ids are globally unique (world-prefixed), so tools stay single-id.
 Run standalone via stdio: `python -m app.mcp_servers.sqlite_server`
 """
 
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -190,13 +191,97 @@ def adjust_player_stats(game_id: str, player_name: str, hp_delta: int = 0, mana_
         conn.close()
 
 
+def _resolution_state(conn, game_id: str):
+    """(steps, done_indexes) for the game's world, or (None, None) if the
+    game doesn't exist / the world predates resolutions."""
+    row = conn.execute(
+        "SELECT g.resolution_progress_json, w.resolution_json "
+        "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
+        (game_id,),
+    ).fetchone()
+    if row is None or row["resolution_json"] is None:
+        return None, (None if row is None else [])
+    steps = json.loads(row["resolution_json"])["steps"]
+    done = json.loads(row["resolution_progress_json"])
+    return steps, done
+
+
 @mcp.tool()
-def complete_game(game_id: str) -> dict:
-    """Declare the campaign WON. Call this exactly once, only when the
-    world's pre-authored 'resolution' fact has genuinely been satisfied —
-    then narrate the ending. No further turns can be taken afterward."""
+def get_resolution(game_id: str) -> dict:
+    """The campaign's victory arc: {summary, steps: [{index, anchor,
+    requirement, done}]}. These are SECRET pacing structure — foreshadow
+    them, let players discover them through play, never list them outright.
+    Returns {"error": ...} if game_id doesn't exist."""
     conn = _connect()
     try:
+        row = conn.execute(
+            "SELECT g.resolution_progress_json, w.resolution_json "
+            "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return {"error": f"unknown game '{game_id}'"}
+        if row["resolution_json"] is None:
+            return {"summary": None, "steps": []}
+        resolution = json.loads(row["resolution_json"])
+        done = set(json.loads(row["resolution_progress_json"]))
+        return {
+            "summary": resolution["summary"],
+            "steps": [
+                {"index": i, **step, "done": i in done}
+                for i, step in enumerate(resolution["steps"])
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def complete_resolution_step(game_id: str, step_index: int) -> dict:
+    """Mark ONE resolution step as genuinely, fully accomplished — a scene
+    or more of real play, never a mere attempt or a partial success.
+    Returns {steps_done, steps_total}. Errors on unknown or already-done
+    steps."""
+    conn = _connect()
+    try:
+        steps, done = _resolution_state(conn, game_id)
+        if done is None:
+            return {"error": f"unknown game '{game_id}'"}
+        if steps is None:
+            return {"error": "this world has no resolution steps"}
+        if not (0 <= step_index < len(steps)):
+            return {"error": f"no resolution step {step_index}"}
+        if step_index in done:
+            return {"error": f"step {step_index} is already complete"}
+        done.append(step_index)
+        conn.execute(
+            "UPDATE games SET resolution_progress_json = ? WHERE id = ?",
+            (json.dumps(sorted(done)), game_id),
+        )
+        conn.commit()
+        return {"steps_done": len(done), "steps_total": len(steps)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def complete_game(game_id: str) -> dict:
+    """Declare the campaign WON — allowed only after EVERY resolution step
+    has been completed via complete_resolution_step (enforced here, not on
+    trust). Call it once, then narrate the ending. No further turns can be
+    taken afterward."""
+    conn = _connect()
+    try:
+        steps, done = _resolution_state(conn, game_id)
+        # Pre-journey worlds (steps is None) keep the old single-judgment
+        # behavior; journey worlds are code-gated.
+        if steps is not None and len(done) < len(steps):
+            return {
+                "error": (
+                    f"the journey is not complete: {len(done)} of {len(steps)} "
+                    "resolution steps done — victory cannot be declared yet"
+                )
+            }
         cursor = conn.execute(
             "UPDATE games SET status = 'won' WHERE id = ? AND status = 'active'", (game_id,)
         )
@@ -233,6 +318,11 @@ def move_party(game_id: str, direction: str) -> dict:
         new_location = exit_row["to_location_id"]
         conn.execute(
             "UPDATE games SET location_id = ? WHERE id = ?", (new_location, game_id)
+        )
+        # Fog-of-war: the room is now and forever visited for this party.
+        conn.execute(
+            "INSERT OR IGNORE INTO game_visits (game_id, location_id) VALUES (?, ?)",
+            (game_id, new_location),
         )
         conn.commit()
         return {"game_id": game_id, "from": current, "to": new_location}

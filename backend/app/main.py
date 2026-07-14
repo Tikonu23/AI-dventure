@@ -257,6 +257,8 @@ async def game_state(game_id: str, token: str) -> dict:
         "world_title": game["world_title"],
         "world_backdrop": game["world_backdrop"],
         "status": game["status"],
+        "map": db.get_visited_map(game_id),
+        "milestones": db.get_milestones(game_id),
         "players": db.list_players(game_id),
         "log": log_entries,
         "last_log_id": last_log_id,

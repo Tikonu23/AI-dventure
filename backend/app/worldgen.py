@@ -116,10 +116,41 @@ WORLD_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        "resolution": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "anchor": {"type": "string"},
+                            "requirement": {"type": "string"},
+                        },
+                        "required": ["anchor", "requirement"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["summary", "steps"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["title", "concept", "starting_location", "locations", "npcs", "facts"],
+    "required": [
+        "title",
+        "concept",
+        "starting_location",
+        "locations",
+        "npcs",
+        "facts",
+        "resolution",
+    ],
     "additionalProperties": False,
 }
+
+# Journey pacing bounds, enforced by the validator.
+RESOLUTION_STEP_BOUNDS = (2, 4)
 
 GEN_SYSTEM = """\
 You are the world-builder for a Darkest Dungeon-style text adventure: \
@@ -150,11 +181,15 @@ opens, what an NPC is concealing, a ritual's true cost. Write 4-8 of them. \
 "world" for campaign-level truths. Make them concrete and adjudicable — \
 "the Collector's hood hides a second face that must be addressed by name" \
 beats "the Collector has a secret".
-- Exactly ONE fact must have entity "world" and key "resolution": the \
-concrete, achievable condition that ends the campaign in victory. It must \
-be something a party can actually accomplish through play (destroy, \
-banish, escape, break, answer) — not a mood. The game master will end the \
-campaign when it is genuinely met.
+- `resolution` is the campaign's spine: a one-sentence `summary` of what \
+ends this campaign in victory, and 2-4 `steps` that must ALL be genuinely \
+accomplished to get there. Each step's `requirement` is concrete and \
+adjudicable (learn X from Y, retrieve X, destroy X, perform X at Y) — \
+something a party earns across a scene or more, never a single utterance. \
+Each step's `anchor` is the slug of the location or NPC where it happens; \
+spread the anchors across the world so victory is a journey, with at most \
+one step at the starting location. The game master reveals steps only \
+through play.
 """
 
 GEN_USER_TEMPLATE = """\
@@ -425,13 +460,28 @@ def validate_world(world: dict) -> None:
         if fact.get("entity") not in valid_entities:
             errors.append(f"fact against unknown entity {fact.get('entity')!r}")
 
-    # The campaign must be winnable: one pre-authored world/resolution fact.
-    resolutions = [
-        f for f in world.get("facts", [])
-        if f.get("entity") == "world" and f.get("key") == "resolution"
-    ]
-    if len(resolutions) != 1:
-        errors.append(f"{len(resolutions)} world/resolution facts, need exactly 1")
+    # The campaign must be winnable AND journey-shaped: 3-5 concrete steps
+    # spread across the world, so a two-turn win is structurally impossible.
+    resolution = world.get("resolution") or {}
+    steps = resolution.get("steps", [])
+    lo, hi = RESOLUTION_STEP_BOUNDS
+    if not resolution.get("summary"):
+        errors.append("resolution has no summary")
+    if not (lo <= len(steps) <= hi):
+        errors.append(f"{len(steps)} resolution steps, need {lo}-{hi}")
+    anchors = [s.get("anchor") for s in steps]
+    for anchor in anchors:
+        if anchor not in slugs:
+            errors.append(f"resolution step anchored to unknown entity {anchor!r}")
+    # Spread scales with the step count: a 2-step journey needs 2 places,
+    # anything longer needs at least 3.
+    required_spread = min(len(steps), 3)
+    if steps and len(set(anchors)) < required_spread:
+        errors.append(
+            f"resolution steps span {len(set(anchors))} anchors, need at least {required_spread}"
+        )
+    if start and anchors.count(start) > 1:
+        errors.append("more than one resolution step at the starting location")
 
     if errors:
         raise WorldValidationError(errors)
@@ -590,17 +640,36 @@ FALLBACK_WORLD = {
             ),
         },
     ],
+    "resolution": {
+        "summary": (
+            "Silence the humming beneath the ossuary by reciting the warding "
+            "litany, in its true order, at the drowned altar."
+        ),
+        "steps": [
+            {
+                "anchor": "aldric",
+                "requirement": (
+                    "Calm Brother Aldric until he remembers the warding "
+                    "litany's true order and teaches it."
+                ),
+            },
+            {
+                "anchor": "ossuary",
+                "requirement": (
+                    "Answer the humming by striking its three-note rhythm on "
+                    "the femur chimes, opening the sealed descent."
+                ),
+            },
+            {
+                "anchor": "sunken_chapel",
+                "requirement": (
+                    "Recite the litany in its true order at the drowned "
+                    "altar, silencing the hum for good."
+                ),
+            },
+        ],
+    },
     "facts": [
-        {
-            "entity": "world",
-            "key": "resolution",
-            "value": (
-                "The haunt ends when the humming beneath the ossuary is "
-                "answered on the femur chimes and the warding litany is "
-                "recited, in its true order, at the drowned altar — silencing "
-                "the chapel and freeing the gate."
-            ),
-        },
         {
             "entity": "collector",
             "key": "weakness",

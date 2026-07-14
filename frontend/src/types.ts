@@ -75,6 +75,21 @@ export interface GameOverEvent {
   outcome: 'won' | 'lost'
 }
 
+/** A resolution step was earned — fills the milestone dots. */
+export interface MilestoneEvent {
+  type: 'milestone'
+  done: number
+  total: number
+}
+
+/** Fog-of-war map: only visited rooms are ever present; stubs are exits
+ * into the unknown (destination names never leave the server). */
+export interface GameMap {
+  rooms: { id: string; name: string; description: string }[]
+  edges: { from: string; direction: string; to: string }[]
+  stubs: { from: string; direction: string }[]
+}
+
 export interface TurnErrorEvent {
   type: 'turn_error'
 }
@@ -107,6 +122,7 @@ export type RoomEvent =
   | PlayerLeftEvent
   | PlayerStatsEvent
   | GameOverEvent
+  | MilestoneEvent
   | TurnErrorEvent
   | DicePendingEvent
   | DiceResultEvent
@@ -169,4 +185,6 @@ export interface GameSnapshot {
   // Dice expression a mid-flight turn is blocked on, for reconnects.
   pending_roll: string | null
   status: 'active' | 'won' | 'lost'
+  map: GameMap
+  milestones: { done: number; total: number }
 }

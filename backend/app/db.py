@@ -63,7 +63,10 @@ def init_db() -> None:
                 -- (backdrop_mode='svg') or a data:image/png URI ('local').
                 -- Name is a misnomer for raster mode; not worth a rename
                 -- migration. NULL = no art.
-                backdrop_svg TEXT
+                backdrop_svg TEXT,
+                -- {summary, steps: [{anchor, requirement}]} — the journey to
+                -- victory. NULL = pre-journey world (single-fact era).
+                resolution_json TEXT
             );
             CREATE TABLE IF NOT EXISTS locations (
                 id TEXT PRIMARY KEY,
@@ -104,9 +107,12 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
                 -- 'active' | 'won' | 'lost'. Won is model-triggered against
-                -- the world's resolution fact; lost is flipped in code when
-                -- the last living player hits 0 HP.
-                status TEXT NOT NULL DEFAULT 'active'
+                -- the world's resolution steps (all must be complete — code
+                -- enforced); lost is flipped in code when the last living
+                -- player hits 0 HP.
+                status TEXT NOT NULL DEFAULT 'active',
+                -- Completed resolution-step indexes, e.g. '[0, 2]'.
+                resolution_progress_json TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS game_players (
                 id TEXT PRIMARY KEY,
@@ -121,6 +127,13 @@ def init_db() -> None:
                 max_hp INTEGER NOT NULL DEFAULT 100,
                 mana INTEGER NOT NULL DEFAULT 100,
                 max_mana INTEGER NOT NULL DEFAULT 100
+            );
+            -- Fog-of-war: which rooms each game's party has stood in. Only
+            -- these (plus stub exits) are ever sent to clients.
+            CREATE TABLE IF NOT EXISTS game_visits (
+                game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                location_id TEXT NOT NULL,
+                PRIMARY KEY (game_id, location_id)
             );
             -- Server-global key/value settings (e.g. backdrop_mode) — they
             -- affect shared resources like the world pool, so they live
@@ -144,7 +157,9 @@ def init_db() -> None:
         # Additive, idempotent migrations for DBs predating each feature.
         for ddl in (
             "ALTER TABLE worlds ADD COLUMN backdrop_svg TEXT",
+            "ALTER TABLE worlds ADD COLUMN resolution_json TEXT",
             "ALTER TABLE games ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            "ALTER TABLE games ADD COLUMN resolution_progress_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE game_players ADD COLUMN hp INTEGER NOT NULL DEFAULT 100",
             "ALTER TABLE game_players ADD COLUMN max_hp INTEGER NOT NULL DEFAULT 100",
             "ALTER TABLE game_players ADD COLUMN mana INTEGER NOT NULL DEFAULT 100",
@@ -187,9 +202,21 @@ def insert_world(world: dict, status: str = "ready") -> str:
 
     conn = _connect()
     try:
+        resolution = world.get("resolution")
+        resolution_json = None
+        if resolution:
+            resolution_json = json.dumps(
+                {
+                    "summary": resolution["summary"],
+                    "steps": [
+                        {"anchor": qualify(s["anchor"]), "requirement": s["requirement"]}
+                        for s in resolution["steps"]
+                    ],
+                }
+            )
         conn.execute(
-            "INSERT INTO worlds (id, title, concept, starting_location_id, status, backdrop_svg) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO worlds (id, title, concept, starting_location_id, status, "
+            "backdrop_svg, resolution_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 world_id,
                 world["title"],
@@ -197,6 +224,7 @@ def insert_world(world: dict, status: str = "ready") -> str:
                 qualify(world["starting_location"]),
                 status,
                 world.get("backdrop_svg"),
+                resolution_json,
             ),
         )
         for loc in world["locations"]:
@@ -323,6 +351,11 @@ def create_game(name: str, description: str, world: dict) -> dict:
         conn.execute(
             "INSERT INTO games (id, world_id, location_id) VALUES (?, ?, ?)",
             (game_id, world["id"], world["starting_location_id"]),
+        )
+        # The threshold counts as visited — the map never starts empty.
+        conn.execute(
+            "INSERT INTO game_visits (game_id, location_id) VALUES (?, ?)",
+            (game_id, world["starting_location_id"]),
         )
         player = _insert_player(conn, game_id, name, description)
         conn.commit()
@@ -552,6 +585,72 @@ def load_log(game_id: str) -> tuple[list[dict], int]:
                 entry["roll"] = json.loads(r["text"])
             entries.append(entry)
         return entries, (rows[-1]["id"] if rows else 0)
+    finally:
+        conn.close()
+
+
+def get_visited_map(game_id: str) -> dict:
+    """Fog-of-war map data: visited rooms (with names), direction-labeled
+    edges between visited pairs, and stub exits toward unvisited rooms —
+    whose names deliberately never leave the server. Unions the party's
+    current location so pre-feature games start from where they stand."""
+    conn = _connect()
+    try:
+        game = conn.execute(
+            "SELECT location_id FROM games WHERE id = ?", (game_id,)
+        ).fetchone()
+        if game is None:
+            return {"rooms": [], "edges": [], "stubs": []}
+        visited = {
+            r["location_id"]
+            for r in conn.execute(
+                "SELECT location_id FROM game_visits WHERE game_id = ?", (game_id,)
+            )
+        }
+        visited.add(game["location_id"])
+
+        placeholders = ",".join("?" * len(visited))
+        # Descriptions are fair game for visited rooms — the party already
+        # heard them narrated on arrival.
+        rooms = [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT id, name, description FROM locations WHERE id IN ({placeholders})",
+                tuple(visited),
+            )
+        ]
+        edges, stubs = [], []
+        for r in conn.execute(
+            f"SELECT location_id, direction, to_location_id FROM exits "
+            f"WHERE location_id IN ({placeholders})",
+            tuple(visited),
+        ):
+            if r["to_location_id"] in visited:
+                edges.append(
+                    {"from": r["location_id"], "direction": r["direction"], "to": r["to_location_id"]}
+                )
+            else:
+                stubs.append({"from": r["location_id"], "direction": r["direction"]})
+        return {"rooms": rooms, "edges": edges, "stubs": stubs}
+    finally:
+        conn.close()
+
+
+def get_milestones(game_id: str) -> dict:
+    """{done, total} for the dots — step text stays server-side. 0/0 for
+    games on pre-journey worlds."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT g.resolution_progress_json, w.resolution_json "
+            "FROM games g JOIN worlds w ON w.id = g.world_id WHERE g.id = ?",
+            (game_id,),
+        ).fetchone()
+        if row is None or row["resolution_json"] is None:
+            return {"done": 0, "total": 0}
+        total = len(json.loads(row["resolution_json"])["steps"])
+        done = len(json.loads(row["resolution_progress_json"]))
+        return {"done": done, "total": total}
     finally:
         conn.close()
 
